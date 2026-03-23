@@ -1,0 +1,43 @@
+Chap 1: Introduction
+
+Chap 2: Operating-System Structures
+
+Chap 3: Process
+
+Chap 4: Threads and Concurrency
+
+Chap 5: CPU Scheduling
+
+Chap 6: Synchronization Tools
+
+Chap 7: Synchronization Examples
+
+Chap 8: Deadlocks
+
+Chap 9: Main Memory
+
+Chap 10: Virtual Memoryu
+
+Chap 11: Mass-Storage Structure (!)
+
+Chap 12: I/O
+
+Chap 13: File-System Interface
+
+Chap 14: File-System Implementation
+
+Chap 15: File-System Internals
+
+Chap 16: Security
+
+Chap 17: Protection (!)
+
+Chap 18: Virtual Machine
+
+Chap 19: Networks and Distributed Systems
+
+Chap 20: The Linux System
+
+Chap 21: The Windows 10 System
+
+Appendix A: Influentia Operating System (!)
