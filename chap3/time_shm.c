@@ -38,6 +38,7 @@ int main(int argc, char *argv[]) {
         double elapsed = (end.tv_sec - start.tv_sec) * 1e3 +
                          (end.tv_usec - start.tv_usec) / 1e3;
         printf("Elapsed time: %.3f ms\n", elapsed);
+        shm_unlink("/myshm");
     }
     return 0;
 }
