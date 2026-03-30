@@ -1,9 +1,7 @@
-*
+*.pdf
+*.symbol
+*.img
+*.o
+*.bin
 
-!assignment*/
-
-!makefile
-!*.md
-!*.asm
-!*.cpp
-!.gitignore
+materials/
