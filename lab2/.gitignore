@@ -1,6 +1,7 @@
-*
+materials/
+*.pdf
+*.bin
+*.lst
+report/
+*.img
 
-!*.md
-!*.asm
-!*.cpp
-!.gitignore
