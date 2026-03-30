@@ -1,0 +1,9 @@
+*
+
+!assignment*/
+
+!makefile
+!*.md
+!*.asm
+!*.cpp
+!.gitignore
