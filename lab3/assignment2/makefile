@@ -1,4 +1,4 @@
-.PHONY: build run debug clean gdb
+.PHONY: build run debug clean
 
 run:
 	qemu-system-i386 -hda hd.img -serial null -parallel stdio 
