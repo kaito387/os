@@ -4,6 +4,9 @@ global asm_hello_world
 global asm_lidt
 global asm_unhandled_interrupt
 global asm_halt
+global asm_my_interrupt_handler
+
+extern my_interrupt_handler
 
 ASM_UNHANDLED_INTERRUPT_INFO db 'Unhandled interrupt happened, halt...'
                              db 0
@@ -85,4 +88,9 @@ asm_hello_world:
     ret
 
 asm_halt:
+    jmp $
+
+asm_my_interrupt_handler:
+    cli
+    call my_interrupt_handler
     jmp $

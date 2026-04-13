@@ -8,9 +8,9 @@
 *.bin
 
 
-*build/
-!makefile
-!Makefile
+**/build/*
+!**/build/makefile
+!**/build/Makefile
 
-*run/
-!gdbinit
+**/run/*
+!**/run/gdbinit

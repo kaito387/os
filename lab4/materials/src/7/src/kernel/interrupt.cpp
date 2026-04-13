@@ -7,6 +7,8 @@
 extern STDIO stdio;
 
 int times = 0;
+int marqueeOffset = 0;
+const char marqueeText[] = "  24344064KaitoLiao   ";
 
 InterruptManager::InterruptManager()
 {
@@ -87,13 +89,18 @@ void InterruptManager::setTimeInterrupt(void *handler)
 // 中断处理函数
 extern "C" void c_time_interrupt_handler()
 {
-    // 清空屏幕
-    for (int i = 0; i < 80; ++i)
+    int textLength = sizeof(marqueeText) - 1;
+    const int marqueeRows = 24;
+    for (int row = 0; row < marqueeRows; ++row)
     {
-        stdio.print(0, i, ' ', 0x07);
+        for (int col = 0; col < 80; ++col)
+        {
+            int index = (row * 80 + col + marqueeOffset) % textLength;
+            stdio.print(row, col, marqueeText[index], ((row + col) % 7) + 1);
+        }
     }
+    marqueeOffset = (marqueeOffset + 1) % textLength;
 
-    // 输出中断发生的次数
     ++times;
     char str[] = "interrupt happend: ";
     char number[10];
@@ -109,8 +116,7 @@ extern "C" void c_time_interrupt_handler()
         temp /= 10;
     }
 
-    // 移动光标到(0,0)输出字符
-    stdio.moveCursor(0);
+    stdio.moveCursor(24, 0);
     for(int i = 0; str[i]; ++i ) {
         stdio.print(str[i]);
     }
