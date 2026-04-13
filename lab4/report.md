@@ -197,14 +197,3 @@ extern "C" void c_time_interrupt_handler() {
 3. 能够使用 C++ 代码在中断上下文中驱动屏幕动态效果，满足“非纯汇编”的实验要求。
 
 遇到的主要问题是中断处理现场保护与返回流程，最终通过汇编包装函数统一完成 `pushad/call/popad/iret` 解决。
-
----
-
-## 注
-
-1. 请先补全首页姓名、学号、班级、日期信息。
-2. 本报告已按模板组织，可直接粘贴截图后导出 PDF。
-3. 如需替换成真实信息，请修改：  
-   - `materials/src/5/src/kernel/setup.cpp` 中 `studentId`  
-   - `materials/src/7/src/kernel/interrupt.cpp` 中 `marqueeText`
-4. 建议最终文件命名为：`学号+姓名.pdf`。
