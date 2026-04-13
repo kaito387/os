@@ -1,0 +1,16 @@
+*.html
+*.png
+*.PNG
+*.out
+*.S
+*.i
+*.o
+*.bin
+
+
+*build/
+!makefile
+!Makefile
+
+*run/
+!gdbinit
