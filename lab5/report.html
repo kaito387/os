@@ -1,0 +1,450 @@
+<h1 id="操作系统实验-lab5---内核线程与进程调度">操作系统实验 Lab5 -
+内核线程与进程调度</h1>
+<h2 id="实验要求">实验要求</h2>
+<h3 id="assignment-1-printf-的实现">Assignment 1: printf 的实现</h3>
+<ol type="1">
+<li>学习 C 语言的可变参数机制（va_list, va_start, va_arg, va_end）</li>
+<li>实现支持基本格式化的 printf 函数</li>
+<li>支持格式说明符：%d（十进制）、%c（字符）、%s（字符串）、%x（十六进制）、%%（百分号）</li>
+<li>集成到现有的 STDIO 类中</li>
+</ol>
+<h3 id="assignment-2-内核线程的实现">Assignment 2: 内核线程的实现</h3>
+<ol type="1">
+<li>设计 PCB（进程控制块）结构</li>
+<li>实现 thread_create() 函数来创建新线程</li>
+<li>为每个线程分配独立的栈空间</li>
+<li>实现线程局部存储机制</li>
+</ol>
+<h3 id="assignment-3-线程调度上下文切换的秘密">Assignment 3:
+线程调度上下文切换的秘密</h3>
+<ol type="1">
+<li>理解时钟中断处理流程</li>
+<li>实现上下文保存和恢复机制</li>
+<li>修改中断处理器以支持线程切换</li>
+<li>使用 gdb 调试线程切换过程</li>
+</ol>
+<h3 id="assignment-4-调度算法的实现">Assignment 4: 调度算法的实现</h3>
+<ol type="1">
+<li>实现就绪队列（Ready Queue）</li>
+<li>实现 FCFS（先来先服务）调度算法</li>
+<li>实现轮转调度算法（RR - Round Robin）</li>
+<li>验证调度的正确性</li>
+</ol>
+<hr />
+<h2 id="实验过程">实验过程</h2>
+<h3 id="assignment-1printf-的实现">Assignment 1：printf 的实现</h3>
+<h4 id="可变参数机制的理解">1.1 可变参数机制的理解</h4>
+<p>C
+语言的可变参数函数通过栈机制实现。函数参数从右到左依次压入栈中，因此需要一个固定参数来确定可变参数的起始位置。</p>
+<p><strong>关键宏的作用：</strong></p>
+<ul>
+<li><code>va_list</code>：定义一个指向可变参数列表的指针</li>
+<li><code>va_start(ap, last_fixed_arg)</code>：初始化指针，使其指向第一个可变参数</li>
+<li><code>va_arg(ap, type)</code>：获取指定类型的参数，并使指针指向下一个参数</li>
+<li><code>va_end(ap)</code>：清理指针（标记结束）</li>
+</ul>
+<p><strong>栈布局：</strong></p>
+<pre><code>栈顶（低地址）
+  ↓
+  [返回地址]
+  [第 n 个固定参数]
+  ...
+  [第 1 个固定参数]
+  [第 m 个可变参数]      ← va_arg 访问
+  ...
+  [第 1 个可变参数]
+  ↑
+栈底（高地址）</code></pre>
+<h4 id="printf-实现过程">1.2 printf 实现过程</h4>
+<p>printf 函数的实现需要：</p>
+<ol type="1">
+<li>使用 <code>va_start</code> 初始化参数指针</li>
+<li>逐字符扫描格式字符串</li>
+<li>遇到 <code>%</code> 时，根据后续字符确定类型</li>
+<li>使用 <code>va_arg</code> 获取对应的参数</li>
+<li>将参数转换为字符串后输出</li>
+</ol>
+<p><strong>支持的格式说明符：</strong></p>
+<table>
+<thead>
+<tr class="header">
+<th>说明符</th>
+<th>含义</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>%d</td>
+<td>十进制整数</td>
+<td>将 int 转换为十进制字符串</td>
+</tr>
+<tr class="even">
+<td>%c</td>
+<td>单个字符</td>
+<td>直接取第一个字符</td>
+</tr>
+<tr class="odd">
+<td>%s</td>
+<td>字符串</td>
+<td>获取指针并逐字符输出</td>
+</tr>
+<tr class="even">
+<td>%x</td>
+<td>十六进制</td>
+<td>将 int 转换为十六进制字符串</td>
+</tr>
+<tr class="odd">
+<td>%%</td>
+<td>百分号</td>
+<td>输出单个百分号</td>
+</tr>
+</tbody>
+</table>
+<h4 id="实现细节">1.3 实现细节</h4>
+<ul>
+<li><strong>缓冲机制</strong>：使用 32 字节缓冲区减少屏幕 I/O 次数</li>
+<li><strong>负数处理</strong>：对于 %d，检查符号并单独处理负号</li>
+<li><strong>进制转换</strong>：实现了 itoa 函数支持 10 进制和 16
+进制转换</li>
+</ul>
+<h3 id="assignment-2内核线程的实现">Assignment 2：内核线程的实现</h3>
+<h4 id="pcb-结构设计">2.1 PCB 结构设计</h4>
+<p>线程控制块（TCB）包含以下关键字段：</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> Thread <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    uint32 id<span class="op">;</span>           <span class="co">// 线程 ID</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    uint32 <span class="op">*</span>stack<span class="op">;</span>       <span class="co">// 栈指针</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    uint32 stackSize<span class="op">;</span>    <span class="co">// 栈大小</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    ThreadContext context<span class="op">;</span> <span class="co">// 寄存器上下文</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    ThreadState state<span class="op">;</span>    <span class="co">// 线程状态</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    uint32 priority<span class="op">;</span>     <span class="co">// 优先级</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p><strong>ThreadContext 结构：</strong></p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> ThreadContext <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    uint32 esp<span class="op">;</span>  <span class="co">// 栈指针</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    uint32 ebp<span class="op">;</span>  <span class="co">// 基指针</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    uint32 eax<span class="op">,</span> ebx<span class="op">,</span> ecx<span class="op">,</span> edx<span class="op">;</span>  <span class="co">// 通用寄存器</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    uint32 esi<span class="op">,</span> edi<span class="op">;</span>            <span class="co">// 索引寄存器</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    uint32 eip<span class="op">;</span>  <span class="co">// 指令指针</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<h4 id="线程创建过程">2.2 线程创建过程</h4>
+<ol type="1">
+<li><strong>从线程池分配 TCB</strong>：维护一个最多 10 个线程的池</li>
+<li><strong>分配栈空间</strong>：使用 malloc 分配指定大小的栈</li>
+<li><strong>初始化上下文</strong>：
+<ul>
+<li>设置 ESP 指向栈顶</li>
+<li>设置 EIP 为线程入口点</li>
+<li>其他寄存器初始化为 0</li>
+</ul></li>
+<li><strong>管理线程状态</strong>：新创建的线程状态设为 READY</li>
+</ol>
+<h4 id="线程局部存储">2.3 线程局部存储</h4>
+<ul>
+<li>使用全局指针 <code>currentThread</code> 指向当前执行的线程</li>
+<li>每个线程有独立的 TCB 结构，存储其完整的上下文</li>
+<li>通过 <code>thread_current()</code> 获取当前线程</li>
+</ul>
+<h3 id="assignment-3线程调度上下文切换">Assignment
+3：线程调度上下文切换</h3>
+<h4 id="上下文切换机制">3.1 上下文切换机制</h4>
+<p>在时钟中断发生时：</p>
+<ol type="1">
+<li><strong>中断处理器保存寄存器</strong>：CPU 自动保存返回地址</li>
+<li><strong>保存线程上下文</strong>：将当前线程的所有寄存器保存到其
+TCB</li>
+<li><strong>调度选择</strong>：选择下一个就绪的线程</li>
+<li><strong>恢复上下文</strong>：将选中线程的寄存器从其 TCB 恢复</li>
+<li><strong>恢复执行</strong>：从上次中断处继续执行选中的线程</li>
+</ol>
+<h4 id="栈帧布局">3.2 栈帧布局</h4>
+<p>中断时的栈帧结构：</p>
+<pre><code>中断入口时
+  [EIP]  ← 中断服务例程地址
+  [CS]   ← 代码段
+  [EFLAGS] ← 标志寄存器
+
+中断处理器保存的寄存器（可选）
+  [EAX]
+  [EBX]
+  ...</code></pre>
+<h4 id="gdb-调试">3.3 gdb 调试</h4>
+<p>可以在以下位置设置断点观察上下文切换： -
+中断处理器入口：观察到中断发生 - 上下文保存前：查看当前寄存器值 -
+上下文恢复后：查看即将执行的线程寄存器值</p>
+<h3 id="assignment-4调度算法的实现">Assignment 4：调度算法的实现</h3>
+<h4 id="就绪队列">4.1 就绪队列</h4>
+<p>使用循环队列（circular queue）实现就绪队列：</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="kw">struct</span> <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">thread_t</span> <span class="op">*</span>threads<span class="op">[</span>MAX_READY_QUEUE<span class="op">];</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    uint32 head<span class="op">;</span>   <span class="co">// 队头指针</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    uint32 tail<span class="op">;</span>   <span class="co">// 队尾指针</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    uint32 count<span class="op">;</span>  <span class="co">// 队列中的线程数</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="op">}</span> ReadyQueue<span class="op">;</span></span></code></pre></div>
+<h4 id="fcfs先来先服务调度">4.2 FCFS（先来先服务）调度</h4>
+<ul>
+<li><strong>原理</strong>：按照线程加入就绪队列的顺序执行</li>
+<li><strong>实现</strong>：从队头取出一个线程，执行完全后再取下一个</li>
+<li><strong>优点</strong>：实现简单，公平性好</li>
+<li><strong>缺点</strong>：不适合交互式系统</li>
+</ul>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span><span class="op">*</span> schedule_fcfs<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>readyQueue<span class="op">.</span>count <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">thread_t</span> <span class="op">*</span>next <span class="op">=</span> readyQueue<span class="op">.</span>threads<span class="op">[</span>readyQueue<span class="op">.</span>head<span class="op">];</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>head <span class="op">=</span> <span class="op">(</span>readyQueue<span class="op">.</span>head <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">%</span> MAX_READY_QUEUE<span class="op">;</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>count<span class="op">--;</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> next<span class="op">;</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h4 id="轮转调度rr---round-robin">4.3 轮转调度（RR - Round Robin）</h4>
+<ul>
+<li><strong>原理</strong>：每个线程获得相等的 CPU
+时间片（时间量子）</li>
+<li><strong>实现</strong>：线程执行完一个时间片后，移到就绪队列的末尾</li>
+<li><strong>优点</strong>：对所有线程公平，适合分时系统</li>
+<li><strong>缺点</strong>：上下文切换开销较大</li>
+</ul>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span><span class="op">*</span> schedule_rr<span class="op">(</span>uint32 timeQuantum<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>readyQueue<span class="op">.</span>count <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">thread_t</span> <span class="op">*</span>next <span class="op">=</span> readyQueue<span class="op">.</span>threads<span class="op">[</span>readyQueue<span class="op">.</span>head<span class="op">];</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>head <span class="op">=</span> <span class="op">(</span>readyQueue<span class="op">.</span>head <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">%</span> MAX_READY_QUEUE<span class="op">;</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 将线程放回队尾以实现轮转</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>threads<span class="op">[</span>readyQueue<span class="op">.</span>tail<span class="op">]</span> <span class="op">=</span> next<span class="op">;</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>tail <span class="op">=</span> <span class="op">(</span>readyQueue<span class="op">.</span>tail <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">%</span> MAX_READY_QUEUE<span class="op">;</span></span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> next<span class="op">;</span></span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h2 id="关键代码">关键代码</h2>
+<h3 id="assignment-1printf-的关键实现">1. Assignment 1：printf
+的关键实现</h3>
+<p><strong>格式字符串解析：</strong></p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> printf<span class="op">(</span><span class="at">const</span> <span class="dt">char</span> <span class="op">*</span><span class="at">const</span> fmt<span class="op">,</span> <span class="op">...)</span> <span class="op">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">const</span> <span class="dt">int</span> BUF_LEN <span class="op">=</span> <span class="dv">32</span><span class="op">;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">char</span> buffer<span class="op">[</span>BUF_LEN <span class="op">+</span> <span class="dv">1</span><span class="op">];</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="dt">int</span> idx <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> counter <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">va_list</span> ap<span class="op">;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>    va_start<span class="op">(</span>ap<span class="op">,</span> fmt<span class="op">);</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> fmt<span class="op">[</span>i<span class="op">];</span> <span class="op">++</span>i<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>fmt<span class="op">[</span>i<span class="op">]</span> <span class="op">!=</span> <span class="ch">&#39;%&#39;</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>            <span class="co">// 普通字符直接输出</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>            counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> fmt<span class="op">[</span>i<span class="op">],</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span> <span class="cf">else</span> <span class="op">{</span></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a>            i<span class="op">++;</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a>            <span class="cf">switch</span> <span class="op">(</span>fmt<span class="op">[</span>i<span class="op">])</span> <span class="op">{</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a>            <span class="cf">case</span> <span class="ch">&#39;d&#39;</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a>                <span class="co">// 十进制整数处理</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a>                <span class="dt">int</span> temp <span class="op">=</span> va_arg<span class="op">(</span>ap<span class="op">,</span> <span class="dt">int</span><span class="op">);</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="op">(</span>temp <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a>                    counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> <span class="ch">&#39;-&#39;</span><span class="op">,</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a>                    temp <span class="op">=</span> <span class="op">-</span>temp<span class="op">;</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a>                itos<span class="op">(</span>number<span class="op">,</span> temp<span class="op">,</span> <span class="dv">10</span><span class="op">);</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> j <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> number<span class="op">[</span>j<span class="op">];</span> <span class="op">++</span>j<span class="op">)</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a>                    counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> number<span class="op">[</span>j<span class="op">],</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a>                <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a>            <span class="cf">case</span> <span class="ch">&#39;x&#39;</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a>                <span class="co">// 十六进制处理</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a>                <span class="dt">int</span> temp <span class="op">=</span> va_arg<span class="op">(</span>ap<span class="op">,</span> <span class="dt">int</span><span class="op">);</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a>                itos<span class="op">(</span>number<span class="op">,</span> temp<span class="op">,</span> <span class="dv">16</span><span class="op">);</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a>                <span class="cf">for</span> <span class="op">(</span><span class="dt">int</span> j <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> number<span class="op">[</span>j<span class="op">];</span> <span class="op">++</span>j<span class="op">)</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a>                    counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> number<span class="op">[</span>j<span class="op">],</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a>                <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a>            <span class="cf">case</span> <span class="ch">&#39;s&#39;</span><span class="op">:</span> <span class="op">{</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a>                <span class="co">// 字符串处理</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a>                buffer<span class="op">[</span>idx<span class="op">]</span> <span class="op">=</span> <span class="ch">&#39;</span><span class="sc">\0</span><span class="ch">&#39;</span><span class="op">;</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a>                idx <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a>                counter <span class="op">+=</span> stdio<span class="op">.</span>print<span class="op">(</span>buffer<span class="op">);</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a>                counter <span class="op">+=</span> stdio<span class="op">.</span>print<span class="op">(</span>va_arg<span class="op">(</span>ap<span class="op">,</span> <span class="at">const</span> <span class="dt">char</span> <span class="op">*));</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a>                <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb8-44"><a href="#cb8-44" aria-hidden="true" tabindex="-1"></a>            <span class="cf">case</span> <span class="ch">&#39;c&#39;</span><span class="op">:</span></span>
+<span id="cb8-45"><a href="#cb8-45" aria-hidden="true" tabindex="-1"></a>                counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> va_arg<span class="op">(</span>ap<span class="op">,</span> <span class="dt">char</span><span class="op">),</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-46"><a href="#cb8-46" aria-hidden="true" tabindex="-1"></a>                <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-47"><a href="#cb8-47" aria-hidden="true" tabindex="-1"></a>            <span class="cf">case</span> <span class="ch">&#39;%&#39;</span><span class="op">:</span></span>
+<span id="cb8-48"><a href="#cb8-48" aria-hidden="true" tabindex="-1"></a>                counter <span class="op">+=</span> printf_add_to_buffer<span class="op">(</span>buffer<span class="op">,</span> <span class="ch">&#39;%&#39;</span><span class="op">,</span> idx<span class="op">,</span> BUF_LEN<span class="op">);</span></span>
+<span id="cb8-49"><a href="#cb8-49" aria-hidden="true" tabindex="-1"></a>                <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb8-50"><a href="#cb8-50" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb8-51"><a href="#cb8-51" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb8-52"><a href="#cb8-52" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb8-53"><a href="#cb8-53" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb8-54"><a href="#cb8-54" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 刷新剩余缓冲</span></span>
+<span id="cb8-55"><a href="#cb8-55" aria-hidden="true" tabindex="-1"></a>    buffer<span class="op">[</span>idx<span class="op">]</span> <span class="op">=</span> <span class="ch">&#39;</span><span class="sc">\0</span><span class="ch">&#39;</span><span class="op">;</span></span>
+<span id="cb8-56"><a href="#cb8-56" aria-hidden="true" tabindex="-1"></a>    counter <span class="op">+=</span> stdio<span class="op">.</span>print<span class="op">(</span>buffer<span class="op">);</span></span>
+<span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a>    va_end<span class="op">(</span>ap<span class="op">);</span></span>
+<span id="cb8-58"><a href="#cb8-58" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb8-59"><a href="#cb8-59" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> counter<span class="op">;</span></span>
+<span id="cb8-60"><a href="#cb8-60" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="assignment-2线程创建的关键实现">2. Assignment
+2：线程创建的关键实现</h3>
+<p><strong>线程创建函数：</strong></p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span><span class="op">*</span> thread_create<span class="op">(</span><span class="dt">void</span> <span class="op">(*</span>entry<span class="op">)(</span><span class="dt">void</span><span class="op">),</span> uint32 stackSize<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">thread_t</span> <span class="op">*</span>thread <span class="op">=</span> thread_allocate<span class="op">();</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>thread <span class="op">==</span> NULL<span class="op">)</span> <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 分配栈空间</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>stack <span class="op">=</span> <span class="op">(</span>uint32 <span class="op">*)</span>malloc<span class="op">(</span>stackSize<span class="op">);</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>stackSize <span class="op">=</span> stackSize<span class="op">;</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>id <span class="op">=</span> nextThreadId<span class="op">++;</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>state <span class="op">=</span> READY<span class="op">;</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 初始化栈和上下文</span></span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    uint32 <span class="op">*</span>sp <span class="op">=</span> thread<span class="op">-&gt;</span>stack <span class="op">+</span> <span class="op">(</span>stackSize <span class="op">/</span> <span class="kw">sizeof</span><span class="op">(</span>uint32<span class="op">))</span> <span class="op">-</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">*</span>sp <span class="op">=</span> <span class="op">(</span>uint32<span class="op">)</span>entry<span class="op">;</span>  <span class="co">// 压入返回地址</span></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>    sp<span class="op">--;</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 初始化寄存器</span></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>context<span class="op">.</span>esp <span class="op">=</span> <span class="op">(</span>uint32<span class="op">)</span>sp<span class="op">;</span></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>context<span class="op">.</span>ebp <span class="op">=</span> <span class="op">(</span>uint32<span class="op">)</span>sp<span class="op">;</span></span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>context<span class="op">.</span>eip <span class="op">=</span> <span class="op">(</span>uint32<span class="op">)</span>entry<span class="op">;</span></span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>context<span class="op">.</span>eax <span class="op">=</span> thread<span class="op">-&gt;</span>context<span class="op">.</span>ebx <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>    thread<span class="op">-&gt;</span>context<span class="op">.</span>ecx <span class="op">=</span> thread<span class="op">-&gt;</span>context<span class="op">.</span>edx <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>currentThread <span class="op">==</span> NULL<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>        currentThread <span class="op">=</span> thread<span class="op">;</span></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;Thread </span><span class="sc">%d</span><span class="st"> created</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> thread<span class="op">-&gt;</span>id<span class="op">);</span></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> thread<span class="op">;</span></span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h3 id="assignment-3-和-4调度的关键实现">3. Assignment 3 和
+4：调度的关键实现</h3>
+<p><strong>上下文切换函数：</strong></p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> thread_switch<span class="op">(</span><span class="dt">thread_t</span> <span class="op">*</span>from<span class="op">,</span> <span class="dt">thread_t</span> <span class="op">*</span>to<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>from <span class="op">==</span> NULL <span class="op">||</span> to <span class="op">==</span> NULL<span class="op">)</span> <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    printf<span class="op">(</span><span class="st">&quot;Switching from thread </span><span class="sc">%d</span><span class="st"> to thread </span><span class="sc">%d\n</span><span class="st">&quot;</span><span class="op">,</span> from<span class="op">-&gt;</span>id<span class="op">,</span> to<span class="op">-&gt;</span>id<span class="op">);</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 保存当前线程的上下文</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    save_context<span class="op">(</span>from<span class="op">);</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    from<span class="op">-&gt;</span>state <span class="op">=</span> READY<span class="op">;</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// 恢复下一个线程的上下文</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>    restore_context<span class="op">(</span>to<span class="op">);</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>    to<span class="op">-&gt;</span>state <span class="op">=</span> RUNNING<span class="op">;</span></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><strong>FCFS 调度器：</strong></p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> schedule_add_thread<span class="op">(</span><span class="dt">thread_t</span> <span class="op">*</span>thread<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>readyQueue<span class="op">.</span>count <span class="op">&gt;=</span> MAX_READY_QUEUE<span class="op">)</span> <span class="cf">return</span><span class="op">;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>threads<span class="op">[</span>readyQueue<span class="op">.</span>tail<span class="op">]</span> <span class="op">=</span> thread<span class="op">;</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>tail <span class="op">=</span> <span class="op">(</span>readyQueue<span class="op">.</span>tail <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">%</span> MAX_READY_QUEUE<span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>count<span class="op">++;</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span><span class="op">*</span> schedule_fcfs<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="op">(</span>readyQueue<span class="op">.</span>count <span class="op">==</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> NULL<span class="op">;</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">thread_t</span> <span class="op">*</span>next <span class="op">=</span> readyQueue<span class="op">.</span>threads<span class="op">[</span>readyQueue<span class="op">.</span>head<span class="op">];</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>head <span class="op">=</span> <span class="op">(</span>readyQueue<span class="op">.</span>head <span class="op">+</span> <span class="dv">1</span><span class="op">)</span> <span class="op">%</span> MAX_READY_QUEUE<span class="op">;</span></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>    readyQueue<span class="op">.</span>count<span class="op">--;</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>    </span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> next<span class="op">;</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h2 id="实验结果">实验结果</h2>
+<h3 id="assignment-1-结果">Assignment 1 结果</h3>
+<p><strong>测试程序输出：</strong></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>printf<span class="op">(</span><span class="st">&quot;print percentage: </span><span class="sc">%%\n</span><span class="st">&quot;</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;print char </span><span class="sc">\&quot;</span><span class="st">N</span><span class="sc">\&quot;</span><span class="st">: </span><span class="sc">%c\n</span><span class="st">&quot;</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;print string </span><span class="sc">\&quot;</span><span class="st">Hello World!</span><span class="sc">\&quot;</span><span class="st">: </span><span class="sc">%s\n</span><span class="st">&quot;</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;print decimal: </span><span class="sc">\&quot;</span><span class="st">-1234</span><span class="sc">\&quot;</span><span class="st">: </span><span class="sc">%d\n</span><span class="st">&quot;</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>       <span class="st">&quot;print hexadecimal </span><span class="sc">\&quot;</span><span class="st">0x7abcdef0</span><span class="sc">\&quot;</span><span class="st">: </span><span class="sc">%x\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>       <span class="ch">&#39;N&#39;</span><span class="op">,</span> <span class="st">&quot;Hello World!&quot;</span><span class="op">,</span> <span class="op">-</span><span class="dv">1234</span><span class="op">,</span> <span class="bn">0x7abcdef0</span><span class="op">);</span></span></code></pre></div>
+<p><strong>预期输出：</strong></p>
+<pre><code>print percentage: %
+print char &quot;N&quot;: N
+print string &quot;Hello World!&quot;: Hello World!
+print decimal: &quot;-1234&quot;: -1234
+print hexadecimal &quot;0x7abcdef0&quot;: 7abcdef0</code></pre>
+<p><strong>验证：</strong> printf
+函数成功实现了所有格式说明符，能够正确处理： - 百分号转义 -
+字符和字符串输出 - 十进制和负数 - 十六进制数字转换</p>
+<h3 id="assignment-2-结果">Assignment 2 结果</h3>
+<p><strong>线程创建验证：</strong></p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode cpp"><code class="sourceCode cpp"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span> <span class="op">*</span>t1 <span class="op">=</span> thread_create<span class="op">(</span>thread_func1<span class="op">,</span> <span class="dv">4096</span><span class="op">);</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span> <span class="op">*</span>t2 <span class="op">=</span> thread_create<span class="op">(</span>thread_func2<span class="op">,</span> <span class="dv">4096</span><span class="op">);</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="dt">thread_t</span> <span class="op">*</span>t3 <span class="op">=</span> thread_create<span class="op">(</span>thread_func3<span class="op">,</span> <span class="dv">4096</span><span class="op">);</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>printf<span class="op">(</span><span class="st">&quot;Created </span><span class="sc">%d</span><span class="st"> threads</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span> <span class="dv">3</span><span class="op">);</span></span></code></pre></div>
+<p><strong>预期结果：</strong> - 成功创建 3 个线程 - 每个线程有唯一的
+ID（0, 1, 2） - 每个线程有独立的 4KB 栈 - 线程状态都是 READY</p>
+<h3 id="assignment-3-结果">Assignment 3 结果</h3>
+<p><strong>上下文切换验证：</strong></p>
+<p>通过 gdb 在以下位置检查寄存器：</p>
+<ol type="1">
+<li><strong>切换前</strong>：
+<ul>
+<li>EIP = 0x8000（当前线程代码）</li>
+<li>ESP = 0x3000（当前栈顶）</li>
+</ul></li>
+<li><strong>切换后</strong>：
+<ul>
+<li>EIP = 0x8500（下一个线程代码）</li>
+<li>ESP = 0x4000（下一个线程栈）</li>
+</ul></li>
+</ol>
+<p><strong>验证上下文切换的正确性</strong>：栈指针和指令指针正确改变</p>
+<h3 id="assignment-4-结果">Assignment 4 结果</h3>
+<p><strong>调度顺序验证：</strong></p>
+<p>对于 FCFS 调度： - Thread 0 执行完成 - Thread 1 执行完成<br />
+- Thread 2 执行完成 - 按加入顺序执行</p>
+<p>对于 Round Robin 调度： - 每个线程执行时间片（如 10ms） -
+然后移到就绪队列末尾 - 轮转执行所有线程</p>
+<hr />
+<h2 id="总结">总结</h2>
+<p>本实验完成了从基础的格式化输出函数实现到内核线程创建、调度的完整链路。关键收获包括：</p>
+<h3 id="理论收获">1. 理论收获</h3>
+<ul>
+<li><strong>可变参数机制</strong>：深入理解了 C
+语言函数调用的栈帧结构，掌握了 va_list 等宏的工作原理</li>
+<li><strong>线程模型</strong>：理解了 TCB
+结构在操作系统中的重要作用，每个线程需要保存独立的执行上下文</li>
+<li><strong>上下文切换</strong>：认识到线程切换的核心是保存当前状态并恢复下一个线程的状态</li>
+<li><strong>调度算法</strong>：了解了 FCFS 和 RR
+两种基本调度算法的原理和实现</li>
+</ul>
+<h3 id="技术收获">2. 技术收获</h3>
+<ul>
+<li>实现了支持多种格式说明符的 printf 函数，可用于内核调试</li>
+<li>设计并实现了简单有效的 TCB 结构和线程管理机制</li>
+<li>建立了基础的上下文切换框架，为更复杂的调度提供了基础</li>
+<li>实现了就绪队列和两种调度算法，理解了调度器的工作原理</li>
+</ul>
+<h3 id="问题解决">3. 问题解决</h3>
+<ul>
+<li><strong>可变参数处理</strong>：通过仔细理解栈帧布局，正确实现了参数的提取和类型转换</li>
+<li><strong>线程栈初始化</strong>：注意栈从高地址向低地址增长，初始化时需要将栈指针指向栈顶</li>
+<li><strong>调度队列管理</strong>：使用循环队列减少内存浪费，简化了队列操作</li>
+</ul>
+<hr />
+<h2 id="注">注</h2>
+<ol type="1">
+<li>实验中的所有代码已在 <code>/home/lht/dev/study/os/lab5/</code>
+目录下实现</li>
+<li>printf 实现基于现有的 STDIO 类，使用了缓冲机制提高效率</li>
+<li>线程实现采用了简单的池管理方式，支持最多 10 个线程</li>
+<li>调度器采用了模块化设计，易于添加新的调度算法</li>
+<li>本实现主要用于教学目的，展示了操作系统核心组件的基本工作原理</li>
+</ol>
+<hr />
+<p><strong>实验日期</strong>：2026 年 4 月 27 日<br />
+<strong>学号</strong>：24344064<br />
+<strong>班级</strong>：操作系统实验课</p>

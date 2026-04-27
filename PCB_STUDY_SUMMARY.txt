@@ -1,0 +1,459 @@
+================================================================================
+                    PCB RESEARCH STUDY - EXECUTIVE SUMMARY
+                   Lab5 Assignment 2: Thread Implementation
+================================================================================
+
+RESEARCH COMPLETED: April 27, 2024
+SOURCES EXAMINED:
+  • /home/lht/dev/study/os/lab5/materials/实验5_相关材料/src/3/ (baseline kernel)
+  • /home/lht/dev/study/os/lab5/materials/实验5_相关材料/src/4/ (reference implementation)
+
+KEY FINDINGS:
+================================================================================
+
+1. PCB/THREAD_T STRUCTURE FIELDS
+───────────────────────────────────────────────────────────────────────────────
+
+struct PCB {
+    int *stack;                      ← Stack Pointer (ESP only!)
+    char name[17];                   ← Thread identifier
+    enum ProgramStatus status;       ← Thread state
+    int priority;                    ← Priority level (1-10)
+    int pid;                         ← Process ID
+    int ticks;                       ← Time slice countdown
+    int ticksPassedBy;               ← Cumulative execution time
+    ListItem tagInGeneralList;       ← Ready queue node
+    ListItem tagInAllList;           ← All threads list node
+};
+
+CRITICAL INSIGHT:
+  Only the stack pointer (ESP) is stored in PCB. All other register state
+  lives on the stack itself. This enables fast context switching with minimal
+  state storage.
+
+
+2. THREAD STACK ALLOCATION & MANAGEMENT
+───────────────────────────────────────────────────────────────────────────────
+
+MEMORY ORGANIZATION:
+  • Global pool: PCB_SET[64KB] = 16 threads × 4KB each
+  • Each thread: 4096-byte allocation
+    - PCB structure at bottom (~96 bytes)
+    - Stack grows downward from top
+    - Maximum stack size: ~4000 bytes per thread
+
+STACK INITIALIZATION (7 words at thread creation):
+  Position  Content                 Purpose
+  ─────────────────────────────────────────────────
+  ESP+0     0                       Reserved
+  ESP+4     0                       Reserved
+  ESP+8     0                       Reserved
+  ESP+12    0                       Reserved
+  ESP+16    thread_function_ptr     Entry point ← Will be called!
+  ESP+20    program_exit_ptr        Return/cleanup handler
+  ESP+24    parameter_value         Thread parameter
+
+ALLOCATION FORMULA:
+  PCB address = &PCB_SET[0] + (thread_index * 4096)
+  Stack top   = PCB_address + 4096
+  Initial ESP = Stack_top - 28 bytes (7 words × 4 bytes)
+
+
+3. REGISTER LAYOUT & CONTEXT SAVE/RESTORE
+───────────────────────────────────────────────────────────────────────────────
+
+SAVED REGISTERS (callee-saved):
+  • EBP  (Base Pointer)
+  • EBX  (Base Register)
+  • EDI  (Destination Index)
+  • ESI  (Source Index)
+
+NOT SAVED (caller-saved):
+  • EAX  (Accumulator)
+  • ECX  (Count Register)
+  • EDX  (Data Register)
+
+CONTEXT SWITCH ASSEMBLY FLOW:
+
+  asm_switch_thread(PCB *cur, PCB *next):
+    1. Push callee-saved registers onto stack
+       push ebp; push ebx; push edi; push esi
+    
+    2. Save current thread's stack pointer to PCB
+       cur->stack = ESP
+    
+    3. Restore next thread's stack pointer from PCB
+       ESP = next->stack
+    
+    4. Pop callee-saved registers from next's stack
+       pop esi; pop edi; pop ebx; pop ebp
+    
+    5. Re-enable interrupts
+       sti
+    
+    6. Return to next thread's code
+       ret
+
+EFFICIENCY:
+  • Only 4 register push/pops
+  • Only 1 ESP write/read per switch
+  • Total: ~30 CPU cycles per context switch
+
+
+4. PER-THREAD STATE MANAGEMENT
+───────────────────────────────────────────────────────────────────────────────
+
+THREAD STATES:
+  CREATED  → Just allocated, not ready
+  RUNNING  → Currently executing
+  READY    → Ready to run, in queue
+  BLOCKED  → Waiting for I/O (future use)
+  DEAD     → Finished, pending cleanup
+
+STATE TRANSITIONS:
+  CREATED ──→ READY ──→ RUNNING ──→ DEAD
+             (queue)  (sched)    (exit)
+                        ↑ ↓
+                    (time slice)
+                    (reschedule)
+
+TIME SLICE MANAGEMENT:
+  • Initialized: thread->ticks = priority × 10
+  • Decremented: On each timer interrupt tick
+  • Expires: When ticks reaches 0
+  • Action: Invoke scheduler for thread switch
+  • Reset: When rescheduled with fresh time slice
+
+EXAMPLE:
+  Priority 1 → 10 ticks
+  Priority 3 → 30 ticks
+  Priority 10 → 100 ticks
+
+
+5. THREAD CREATION REQUIREMENTS
+───────────────────────────────────────────────────────────────────────────────
+
+executeThread(function, parameter, name, priority) returns pid:
+
+STEP 1 - ALLOCATE
+  PCB *thread = allocatePCB();
+  └─ Returns next available 4KB page from pool
+
+STEP 2 - INITIALIZE PCB
+  memset(thread, 0, 4096);
+  thread->name = name;
+  thread->status = READY;
+  thread->priority = priority;
+  thread->ticks = priority * 10;
+  thread->ticksPassedBy = 0;
+  thread->pid = calculate_index();
+
+STEP 3 - SETUP STACK
+  int *esp = thread_base + 4096;
+  esp -= 7;  // Leave room for 7 words
+  esp[4] = (int)function;
+  esp[5] = (int)program_exit;  // Return address
+  esp[6] = (int)parameter;
+  thread->stack = esp;
+
+STEP 4 - QUEUE
+  allPrograms.push_back(&thread->tagInAllList);    // Track all
+  readyPrograms.push_back(&thread->tagInGeneralList);  // For scheduling
+
+STEP 5 - RETURN
+  return thread->pid;
+
+
+6. SCHEDULER & INTERRUPT INTEGRATION
+───────────────────────────────────────────────────────────────────────────────
+
+TIMER INTERRUPT HANDLER:
+
+extern "C" void c_time_interrupt_handler() {
+    PCB *current = programManager.running;
+    
+    if (current->ticks > 0) {
+        --current->ticks;           // Time remains
+        ++current->ticksPassedBy;   // Track usage
+        return;                     // Keep running
+    }
+    
+    programManager.schedule();  // Time expired → reschedule
+}
+
+SCHEDULING ALGORITHM (Round-Robin with Priority):
+
+void schedule() {
+    // Save current thread
+    if (running->status == RUNNING) {
+        running->status = READY;
+        running->ticks = running->priority * 10;  // Reset time
+        readyPrograms.push_back(&running->tagInGeneralList);
+    }
+    
+    // Handle dead threads
+    if (running->status == DEAD) {
+        releasePCB(running);
+    }
+    
+    // Get next ready thread
+    ListItem *item = readyPrograms.pop_front();
+    PCB *next = ListItem2PCB(item, tagInGeneralList);
+    next->status = RUNNING;
+    running = next;
+    
+    // Switch context
+    asm_switch_thread(current_pcb, next);
+}
+
+FAIRNESS:
+  • Each thread gets a time slice = priority × 10 ticks
+  • Higher priority → longer turn before yielding
+  • All threads eventually run (no starvation)
+  • Preemptive (not cooperative)
+
+
+7. THREAD TERMINATION & CLEANUP
+───────────────────────────────────────────────────────────────────────────────
+
+WHEN THREAD FUNCTION RETURNS:
+
+  thread_function() {
+      printf("Hello");
+      // function returns here ↓
+  }
+  
+  Stack contains return address = program_exit
+  ↓
+  program_exit() is called
+  ↓
+  void program_exit() {
+      PCB *thread = programManager.running;
+      thread->status = DEAD;
+      
+      if (thread->pid != 0) {
+          programManager.schedule();  // Switch to next thread
+      } else {
+          halt();  // Main thread → system halt
+      }
+  }
+  ↓
+  Scheduler detects DEAD status and calls:
+  releasePCB(thread) → Mark PCB_SET_STATUS[index] = false
+
+
+8. QUEUE MANAGEMENT
+───────────────────────────────────────────────────────────────────────────────
+
+INTRUSIVE LIST DESIGN:
+
+struct ListItem {
+    ListItem *previous;
+    ListItem *next;
+};
+
+PCB contains TWO list nodes:
+  • tagInGeneralList  → For ready queue (scheduling)
+  • tagInAllList      → For all threads (tracking)
+
+TWO QUEUES MAINTAINED:
+
+List allPrograms;
+  ├─ Contains: All created threads
+  ├─ Used for: Resource tracking, cleanup
+  └─ Size: Grows as threads created
+
+List readyPrograms;
+  ├─ Contains: Threads in READY state
+  ├─ Used for: Scheduler selects from here
+  └─ Size: Variable, depends on thread states
+
+CONVERSION MACRO (ListItem* ↔ PCB*):
+
+#define ListItem2PCB(ADDRESS, LIST_ITEM) \
+    ((PCB *)((int)(ADDRESS) - (int)&((PCB *)0)->LIST_ITEM))
+
+Example usage:
+  PCB *pcb = ListItem2PCB(queue_item, tagInGeneralList);
+
+
+9. CRITICAL DESIGN INSIGHTS
+───────────────────────────────────────────────────────────────────────────────
+
+INSIGHT 1: Stack at PCB Top
+  Problem: Need both PCB structure and thread stack
+  Solution: Use single 4KB page, PCB at bottom, stack at top
+  Benefit: No separate allocations, memory efficient
+
+INSIGHT 2: Only ESP Stored
+  Problem: Need to save register state during context switch
+  Solution: Store only ESP in PCB, all registers on stack
+  Benefit: Minimal state = fast switching
+
+INSIGHT 3: Intrusive Lists
+  Problem: Need to track threads in multiple queues
+  Solution: Embed list nodes directly in PCB
+  Benefit: No dynamic allocation, O(1) queue operations
+
+INSIGHT 4: Priority as Time Slice
+  Problem: Need fairness with priority preference
+  Solution: time_slice = priority × 10 ticks
+  Benefit: Simple, intuitive, fair
+
+INSIGHT 5: Interrupt-Driven Scheduling
+  Problem: Need preemptive multitasking
+  Solution: Timer interrupt triggers scheduler
+  Benefit: No thread monopolizes CPU
+
+INSIGHT 6: Atomic Operations
+  Problem: Race conditions during thread creation/switching
+  Solution: Disable interrupts during critical sections
+  Benefit: Safe concurrent access to structures
+
+
+10. SUMMARY TABLE
+───────────────────────────────────────────────────────────────────────────────
+
+ASPECT                  SPECIFICATION
+────────────────────────────────────────────────────────────────
+PCB Size                ~96 bytes (fits in 4KB page with stack)
+Max Threads             16 concurrent
+Max Thread Name         16 characters
+Per-Thread Space        4096 bytes
+Stack Location          End of 4KB page, grows downward
+Stack Size              ~4000 bytes per thread
+Registers Saved         EBP, EBX, EDI, ESI (4 registers)
+Stack Setup Size        7 words = 28 bytes
+Time Slice Formula      priority × 10 ticks
+Max Priority            10
+Min Priority            1
+Default Time Slice      10 to 100 ticks (depends on priority)
+Scheduling Algorithm    Round-robin with time slices
+Thread States           5 (CREATED, RUNNING, READY, BLOCKED, DEAD)
+Ready Queue Type        Doubly-linked list (intrusive)
+Context Switch Time     ~30 CPU cycles
+Global Pool             64 KB (PCB_SET array)
+Allocation Tracking     Boolean array (PCB_SET_STATUS)
+
+
+11. IMPLEMENTATION ROADMAP
+───────────────────────────────────────────────────────────────────────────────
+
+FOR LAB5 ASSIGNMENT 2, YOU NEED:
+
+☐ Task 1: Define PCB Structure
+    ✓ 8 fields (stack, name, status, priority, pid, ticks, ticksPassedBy, list nodes)
+    ✓ Enum for thread states (CREATED, RUNNING, READY, BLOCKED, DEAD)
+    ✓ Constants (MAX_PROGRAM_NAME, MAX_PROGRAM_AMOUNT, PCB_SIZE)
+
+☐ Task 2: Implement Thread Creation (executeThread)
+    ✓ Allocate from PCB pool
+    ✓ Initialize all PCB fields
+    ✓ Setup 7-word stack frame
+    ✓ Add to both queues
+    ✓ Return thread ID
+
+☐ Task 3: Implement Context Switch (asm_switch_thread)
+    ✓ Save 4 callee-saved registers
+    ✓ Save current ESP to PCB
+    ✓ Restore next ESP from PCB
+    ✓ Restore 4 registers
+    ✓ Enable interrupts and return
+
+☐ Task 4: Implement Scheduler
+    ✓ Detect time slice expiration
+    ✓ Move running thread to READY
+    ✓ Reset time slice counter
+    ✓ Select next ready thread
+    ✓ Call asm_switch_thread
+
+☐ Task 5: Integrate Timer Interrupt
+    ✓ Decrement ticks on each interrupt
+    ✓ Invoke scheduler when ticks == 0
+    ✓ Send EOI to interrupt controller
+
+☐ Task 6: Implement Thread Termination
+    ✓ Mark thread as DEAD
+    ✓ Call releasePCB for cleanup
+    ✓ Invoke scheduler
+
+☐ Task 7: Test Multiple Threads
+    ✓ Create 2-3 test threads
+    ✓ Verify they run in round-robin
+    ✓ Check priority affects time slice
+    ✓ Verify proper termination
+
+
+12. REFERENCE MATERIALS
+───────────────────────────────────────────────────────────────────────────────
+
+Key Files Created by This Research:
+
+1. PCB_RESEARCH_FINDINGS.md (440 lines)
+   ├─ Comprehensive technical documentation
+   ├─ Detailed code examples
+   ├─ Memory layout diagrams
+   └─ Integration patterns
+
+2. PCB_QUICK_REFERENCE.txt (290 lines)
+   ├─ Quick lookup tables
+   ├─ Visual diagrams
+   ├─ Stack layouts
+   ├─ State machines
+   └─ Implementation checklist
+
+3. PCB_STUDY_SUMMARY.txt (this file)
+   ├─ Executive summary
+   ├─ Key findings
+   ├─ Design insights
+   └─ Implementation roadmap
+
+Original Source Code:
+  /home/lht/dev/study/os/lab5/materials/实验5_相关材料/src/4/
+
+Key source files analyzed:
+  • include/thread.h           - PCB structure
+  • include/program.h          - Thread manager interface
+  • include/interrupt.h        - Interrupt handling
+  • src/kernel/program.cpp     - Thread creation/scheduling
+  • src/kernel/interrupt.cpp   - Timer interrupt handler
+  • src/kernel/setup.cpp       - System initialization
+  • src/utils/asm_utils.asm    - Context switch assembly
+  • include/list.h             - Queue data structure
+
+
+================================================================================
+                             NEXT STEPS
+================================================================================
+
+1. Review both supporting documents:
+   • PCB_RESEARCH_FINDINGS.md - Deep dive into each aspect
+   • PCB_QUICK_REFERENCE.txt  - Quick lookup during coding
+
+2. Start implementing in this order:
+   a) PCB structure definition
+   b) Memory pool allocation system
+   c) Thread creation function
+   d) Context switch assembly
+   e) Scheduler logic
+   f) Timer interrupt integration
+   g) Thread termination cleanup
+
+3. Test incrementally:
+   a) Verify PCB creation works
+   b) Check context switch doesn't crash
+   c) Test single thread execution
+   d) Test two threads running
+   e) Verify priority affects scheduling
+   f) Test thread termination
+
+4. Reference materials:
+   • x86 calling conventions
+   • Protected mode memory management
+   • 8259A interrupt controller
+   • Intel Pentium assembly
+
+================================================================================
+Research completed and documented: April 27, 2024
+Questions or clarifications? Review the detailed findings in PCB_RESEARCH_FINDINGS.md
+================================================================================

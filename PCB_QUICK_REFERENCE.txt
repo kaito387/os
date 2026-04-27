@@ -1,0 +1,290 @@
+================================================================================
+                      PCB STRUCTURE QUICK REFERENCE
+                 Lab5 Assignment 2 - Thread Implementation
+================================================================================
+
+[1] PCB STRUCT DEFINITION
+────────────────────────────────────────────────────────────────────────────────
+struct PCB {
+    int *stack;                      // ← ONLY ESP saved in PCB!
+    char name[17];                   // MAX_PROGRAM_NAME + 1
+    enum ProgramStatus status;       // CREATED/RUNNING/READY/BLOCKED/DEAD
+    int priority;                    // 1-10 (higher = more priority)
+    int pid;                         // Thread ID (0=main thread)
+    int ticks;                       // Remaining time slice ticks
+    int ticksPassedBy;               // Cumulative execution time
+    ListItem tagInGeneralList;       // Ready queue node
+    ListItem tagInAllList;           // All threads list node
+};
+
+Size: ~96 bytes (fits in first part of 4KB page)
+
+
+[2] MEMORY LAYOUT PER THREAD
+────────────────────────────────────────────────────────────────────────────────
+PCB_SET[PCB_SIZE * MAX_PROGRAM_AMOUNT] = 64KB pool for 16 threads
+
+Per-thread allocation (4096 bytes / thread):
+┌─────────────────────────────────┐
+│  PCB Structure (~96 bytes)      │ ← Start of 4KB page
+├─────────────────────────────────┤
+│                                 │
+│  Available Stack Space          │
+│  (grows downward)               │
+│                                 │
+└─────────────────────────────────┘ ← PCB_START + 4096
+                                    Stack pointer starts here
+
+
+[3] STACK INITIALIZATION FOR NEW THREAD
+────────────────────────────────────────────────────────────────────────────────
+thread->stack = (int *)((int)thread + PCB_SIZE);  // Point to end (0x1000)
+thread->stack -= 7;                               // Back up 7 words
+
+After init, stack looks like (ESP points to stack[0]):
+[ESP+0]   stack[0]  = 0                           → Placeholder
+[ESP+4]   stack[1]  = 0                           → Placeholder
+[ESP+8]   stack[2]  = 0                           → Placeholder
+[ESP+12]  stack[3]  = 0                           → Placeholder
+[ESP+16]  stack[4]  = (int)thread_function        → ENTRY POINT
+[ESP+20]  stack[5]  = (int)program_exit           → RETURN/CLEANUP
+[ESP+24]  stack[6]  = (int)parameter              → FUNCTION PARAMETER
+
+Why 7 words?
+  4 words for callee-saved registers (EBP, EBX, EDI, ESI)
+  1 word for thread entry function pointer
+  1 word for return address (cleanup)
+  1 word for parameter
+
+
+[4] CONTEXT SWITCH (REGISTER LAYOUT)
+────────────────────────────────────────────────────────────────────────────────
+Saved Registers:
+  EBP  - Base Pointer (callee-saved)
+  EBX  - Base Register (callee-saved)
+  EDI  - Destination Index (callee-saved)
+  ESI  - Source Index (callee-saved)
+
+NOT Saved (caller's responsibility):
+  EAX  - Accumulator
+  ECX  - Count
+  EDX  - Data
+
+Assembly Context Switch Logic:
+  asm_switch_thread(PCB *cur, PCB *next):
+    push registers (EBP, EBX, EDI, ESI)
+    cur->stack = ESP                    ← Save current stack pointer
+    ESP = next->stack                   ← Restore next thread's stack
+    pop registers (ESI, EDI, EBX, EBP)
+    sti                                 ← Enable interrupts
+    ret                                 ← Jump to next thread
+
+
+[5] THREAD STATES & TRANSITIONS
+────────────────────────────────────────────────────────────────────────────────
+enum ProgramStatus {
+    CREATED = 0,   // Just allocated
+    RUNNING = 1,   // Currently on CPU
+    READY   = 2,   // In ready queue, waiting
+    BLOCKED = 3,   // Waiting for I/O or event
+    DEAD    = 4    // Finished, ready for cleanup
+};
+
+Typical State Transitions:
+    CREATED
+       ↓
+    READY ←───┐
+       ↓      │
+    RUNNING ──┤ (time slice expires)
+       ↓      │
+    DEAD ─────┘ (function returns)
+
+
+[6] TIME SLICING MECHANISM
+────────────────────────────────────────────────────────────────────────────────
+Thread Creation:
+  thread->ticks = priority * 10;      // e.g., priority 1 → 10 ticks
+  thread->ticksPassedBy = 0;
+
+Timer Interrupt Handler (every tick):
+  if (cur->ticks > 0) {
+    --cur->ticks;
+    ++cur->ticksPassedBy;
+  } else {
+    schedule();  // Time expired, invoke scheduler
+  }
+
+Scheduler (when time slice expires):
+  if (running->status == RUNNING) {
+    running->status = READY;
+    running->ticks = running->priority * 10;  // RESET time slice
+    readyPrograms.push_back();  // Back to queue
+  }
+
+
+[7] THREAD CREATION PROCESS
+────────────────────────────────────────────────────────────────────────────────
+int executeThread(ThreadFunction function, void *parameter,
+                  const char *name, int priority):
+
+  1. ALLOCATE:
+     PCB *thread = allocatePCB();
+     ↓ (allocates from PCB_SET[MAX_PROGRAM_AMOUNT])
+
+  2. INITIALIZE PCB FIELDS:
+     memset(thread, 0, PCB_SIZE)
+     thread->name = name;
+     thread->status = READY;
+     thread->priority = priority;
+     thread->ticks = priority * 10;
+     thread->ticksPassedBy = 0;
+     thread->pid = index;
+
+  3. INITIALIZE STACK:
+     thread->stack = (int *)((int)thread + PCB_SIZE);
+     thread->stack -= 7;
+     thread->stack[4] = (int)function;
+     thread->stack[5] = (int)program_exit;
+     thread->stack[6] = (int)parameter;
+
+  4. ADD TO QUEUES:
+     allPrograms.push_back(&thread->tagInAllList);
+     readyPrograms.push_back(&thread->tagInGeneralList);
+
+  5. RETURN:
+     return thread->pid;
+
+
+[8] ROUND-ROBIN SCHEDULING
+────────────────────────────────────────────────────────────────────────────────
+readyPrograms = Queue of READY threads
+running = Pointer to current RUNNING thread
+
+On Each Timer Interrupt:
+  ┌─────────────────────────┐
+  │ Decrement running->ticks│
+  └──────────┬──────────────┘
+             │
+         Is > 0?
+         ├─ YES → Return (keep running)
+         └─ NO → Call schedule()
+
+In schedule():
+  1. running->status = READY
+  2. running->ticks = priority * 10  ← RESET time
+  3. readyPrograms.push_back(running)
+  4. next = readyPrograms.pop_front()
+  5. next->status = RUNNING
+  6. running = next
+  7. asm_switch_thread(cur, next)
+
+
+[9] QUEUE MANAGEMENT
+────────────────────────────────────────────────────────────────────────────────
+List Structure (doubly-linked):
+  struct ListItem {
+    ListItem *previous;
+    ListItem *next;
+  };
+
+Two Queues per System:
+  readyPrograms  → Threads in READY state (scheduling pool)
+  allPrograms    → ALL threads (tracking/cleanup)
+
+Conversion Macro:
+  PCB *pcb = ListItem2PCB(item_ptr, tagInGeneralList);
+  ↓ Calculates: PCB* = item_ptr - offset_of(tagInGeneralList)
+
+
+[10] THREAD TERMINATION
+────────────────────────────────────────────────────────────────────────────────
+When thread function returns:
+  (stack contains return address = program_exit)
+  ↓
+  program_exit() is called:
+    thread->status = DEAD;
+    if (pid != 0) {
+      schedule();  // Other thread takes over
+    } else {
+      halt();      // Main thread exits = system halt
+    }
+  ↓
+  Scheduler eventually calls:
+    releasePCB(thread)
+    ↓
+    PCB_SET_STATUS[index] = false;  // Mark as available
+
+
+[11] KEY DESIGN INSIGHTS
+────────────────────────────────────────────────────────────────────────────────
+1. STACK AT PCB TOP
+   → Memory efficient (both in same 4KB page)
+   → No separate stack allocation
+
+2. ONLY ESP STORED
+   → Minimal context save
+   → All registers on stack
+   → Fast context switch
+
+3. INTRUSIVE LISTS
+   → No dynamic allocation
+   → List nodes embedded in PCB
+   → Thread can be in multiple lists
+
+4. PRIORITY = TIME SLICE
+   → priority * 10 = time slice length
+   → Simple, fair scheduling
+   → Higher priority = longer turn
+
+5. INTERRUPT-DRIVEN SCHEDULING
+   → Timer interrupt → Scheduler
+   → Preemptive multitasking
+   → Fair to all threads
+
+6. ATOMIC OPERATIONS
+   → Disable interrupts during creation/scheduling
+   → Prevent race conditions
+   → Restore interrupt state after
+
+
+[12] CONSTANTS (os_constant.h)
+────────────────────────────────────────────────────────────────────────────────
+IDT_START_ADDRESS    = 0x8880         Interrupt Descriptor Table
+CODE_SELECTOR        = 0x20           Protected mode code segment
+MAX_PROGRAM_NAME     = 16             Max thread name length
+MAX_PROGRAM_AMOUNT   = 16             Max concurrent threads
+
+In program.cpp:
+  PCB_SIZE             = 4096         Per-thread space
+  PCB_SET[64KB]        = Array of PCB_SET[PCB_SIZE * MAX_PROGRAM_AMOUNT]
+  PCB_SET_STATUS[16]   = Allocation tracking
+
+
+[13] ESSENTIAL FILES
+────────────────────────────────────────────────────────────────────────────────
+Source: /home/lht/dev/study/os/lab5/materials/实验5_相关材料/src/4/
+
+thread.h           ← PCB struct definition
+program.h          ← ProgramManager interface
+program.cpp        ← Thread creation, scheduling, allocation
+interrupt.cpp      ← Timer interrupt handler
+asm_utils.asm      ← Context switch assembly
+list.h             ← Queue data structure
+
+
+================================================================================
+                          IMPLEMENTATION CHECKLIST
+================================================================================
+
+[ ] PCB struct with 8 fields
+[ ] Stack initialization with 7 words setup
+[ ] Context switch: save/restore EBP, EBX, EDI, ESI
+[ ] Stack pointer (ESP) stored in PCB
+[ ] Thread creation: allocate → initialize → queue
+[ ] Scheduling: round-robin from ready queue
+[ ] Timer interrupt handler: decrement ticks → invoke scheduler
+[ ] Thread termination: mark DEAD → cleanup
+[ ] Dual queues: readyPrograms + allPrograms
+[ ] Interrupt disable during critical sections
+
+================================================================================
