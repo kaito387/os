@@ -2,68 +2,16 @@
 
 ## 实验要求
 
-### Assignment 1: printf 的实现
-
-1. 学习 C 语言的可变参数机制（va_list, va_start, va_arg, va_end）
-2. 实现支持基本格式化的 printf 函数
-3. 支持格式说明符：%d（十进制）、%c（字符）、%s（字符串）、%x（十六进制）、%%（百分号）
-4. 集成到现有的 STDIO 类中
-
-### Assignment 2: 内核线程的实现
-
-1. 设计 PCB（进程控制块）结构
-2. 实现 thread_create() 函数来创建新线程
-3. 为每个线程分配独立的栈空间
-4. 实现线程局部存储机制
-
-### Assignment 3: 线程调度上下文切换的秘密
-
-1. 理解时钟中断处理流程
-2. 实现上下文保存和恢复机制
-3. 修改中断处理器以支持线程切换
-4. 使用 gdb 调试线程切换过程
-
-### Assignment 4: 调度算法的实现
-
-1. 实现就绪队列（Ready Queue）
-2. 实现 FCFS（先来先服务）调度算法
-3. 实现轮转调度算法（RR - Round Robin）
-4. 验证调度的正确性
+- Assignment 1: printf 的实现
+- Assignment 2: 内核线程的实现
+- Assignment 3: 线程调度上下文切换的秘密
+- Assignment 4: 调度算法的实现
 
 ---
 
 ## 实验过程
 
 ### Assignment 1：printf 的实现
-
-#### 1.1 可变参数机制的理解
-
-C 语言的可变参数函数通过栈机制实现。函数参数从右到左依次压入栈中，因此需要一个固定参数来确定可变参数的起始位置。
-
-**关键宏的作用：**
-
-- `va_list`：定义一个指向可变参数列表的指针
-- `va_start(ap, last_fixed_arg)`：初始化指针，使其指向第一个可变参数
-- `va_arg(ap, type)`：获取指定类型的参数，并使指针指向下一个参数
-- `va_end(ap)`：清理指针（标记结束）
-
-**栈布局：**
-
-```
-栈顶（低地址）
-  ↓
-  [返回地址]
-  [第 n 个固定参数]
-  ...
-  [第 1 个固定参数]
-  [第 m 个可变参数]      ← va_arg 访问
-  ...
-  [第 1 个可变参数]
-  ↑
-栈底（高地址）
-```
-
-#### 1.2 printf 实现过程
 
 printf 函数的实现需要：
 
@@ -73,36 +21,33 @@ printf 函数的实现需要：
 4. 使用 `va_arg` 获取对应的参数
 5. 将参数转换为字符串后输出
 
-**支持的格式说明符：**
+支持的格式说明符大部分和资料一样，本项作业新增了二进制和八进制的支持：
 
 | 说明符 | 含义 | 处理方式 |
 | --- | --- | --- |
-| %d | 十进制整数 | 将 int 转换为十进制字符串 |
+| %% | 百分号 | 输出单个百分号 |
 | %c | 单个字符 | 直接取第一个字符 |
 | %s | 字符串 | 获取指针并逐字符输出 |
+| %b | 二进制 | 将 int 转换为二进制字符串 |
+| %o | 八进制 | 将 int 转换为八进制字符串 |
+| %d | 十进制整数 | 将 int 转换为十进制字符串 |
 | %x | 十六进制 | 将 int 转换为十六进制字符串 |
-| %% | 百分号 | 输出单个百分号 |
-
-#### 1.3 实现细节
-
-- **缓冲机制**：使用 32 字节缓冲区减少屏幕 I/O 次数
-- **负数处理**：对于 %d，检查符号并单独处理负号
-- **进制转换**：实现了 itoa 函数支持 10 进制和 16 进制转换
 
 ### Assignment 2：内核线程的实现
 
 #### 2.1 PCB 结构设计
 
-线程控制块（TCB）包含以下关键字段：
+实际上，PCB 在这里更准确地称为 TCB，因为我们实现的是线程而非进程。TCB 结构包含以下字段：
 
 ```cpp
-struct Thread {
-    uint32 id;           // 线程 ID
-    uint32 *stack;       // 栈指针
-    uint32 stackSize;    // 栈大小
-    ThreadContext context; // 寄存器上下文
-    ThreadState state;    // 线程状态
-    uint32 priority;     // 优先级
+struct TCB {
+    uint32 id;              // 线程 ID
+    uint32 *stack;          // 栈指针
+    enum ThreadState state; // 线程状态
+    uint32 stackSize;       // 栈大小
+    ThreadContext context;  // 寄存器上下文
+    ThreadState state;      // 线程状态
+    uint32 priority;        // 优先级
 };
 ```
 
@@ -231,68 +176,32 @@ thread_t* schedule_rr(uint32 timeQuantum) {
 
 ### 1. Assignment 1：printf 的关键实现
 
-**格式字符串解析：**
+由于 itos 函数已经实现了整数到 2\~26 进制字符串的转换，这里只需要根据不同情况调用不同的进制转换即可：
 
 ```cpp
 int printf(const char *const fmt, ...) {
-    const int BUF_LEN = 32;
-    char buffer[BUF_LEN + 1];
-    int idx = 0, counter = 0;
-    va_list ap;
-    
-    va_start(ap, fmt);
-    
-    for (int i = 0; fmt[i]; ++i) {
-        if (fmt[i] != '%') {
-            // 普通字符直接输出
-            counter += printf_add_to_buffer(buffer, fmt[i], idx, BUF_LEN);
-        } else {
-            i++;
-            switch (fmt[i]) {
-            case 'd': {
-                // 十进制整数处理
-                int temp = va_arg(ap, int);
-                if (temp < 0) {
-                    counter += printf_add_to_buffer(buffer, '-', idx, BUF_LEN);
-                    temp = -temp;
-                }
-                itos(number, temp, 10);
-                for (int j = 0; number[j]; ++j)
-                    counter += printf_add_to_buffer(buffer, number[j], idx, BUF_LEN);
-                break;
-            }
-            case 'x': {
-                // 十六进制处理
-                int temp = va_arg(ap, int);
-                itos(number, temp, 16);
-                for (int j = 0; number[j]; ++j)
-                    counter += printf_add_to_buffer(buffer, number[j], idx, BUF_LEN);
-                break;
-            }
-            case 's': {
-                // 字符串处理
-                buffer[idx] = '\0';
-                idx = 0;
-                counter += stdio.print(buffer);
-                counter += stdio.print(va_arg(ap, const char *));
-                break;
-            }
-            case 'c':
-                counter += printf_add_to_buffer(buffer, va_arg(ap, char), idx, BUF_LEN);
-                break;
-            case '%':
-                counter += printf_add_to_buffer(buffer, '%', idx, BUF_LEN);
-                break;
-            }
+    // ...
+    case 'b':
+    case 'o':
+    case 'd':
+    case 'x':
+        int temp = va_arg(ap, int);
+
+        if (temp < 0 && fmt[i] == 'd') {
+            counter += printf_add_to_buffer(buffer, '-', idx, BUF_LEN);
+            temp = -temp;
         }
-    }
-    
-    // 刷新剩余缓冲
-    buffer[idx] = '\0';
-    counter += stdio.print(buffer);
-    va_end(ap);
-    
-    return counter;
+
+        itos(number, temp, (
+            fmt[i] == 'd' ? 10 : (fmt[i] == 'o' ? 8 :
+            (fmt[i] == 'x' ? 16 : 2))));
+
+        for (int j = temp - 1; j >= 0; --j) {
+            counter += printf_add_to_buffer(buffer, number[j], idx, BUF_LEN);
+        }
+
+        break;
+    // ...
 }
 ```
 
@@ -380,32 +289,9 @@ thread_t* schedule_fcfs(void) {
 
 ### Assignment 1 结果
 
-**测试程序输出：**
+**程序输出：**
 
-```c
-printf("print percentage: %%\n"
-       "print char \"N\": %c\n"
-       "print string \"Hello World!\": %s\n"
-       "print decimal: \"-1234\": %d\n"
-       "print hexadecimal \"0x7abcdef0\": %x\n",
-       'N', "Hello World!", -1234, 0x7abcdef0);
-```
-
-**预期输出：**
-
-```
-print percentage: %
-print char "N": N
-print string "Hello World!": Hello World!
-print decimal: "-1234": -1234
-print hexadecimal "0x7abcdef0": 7abcdef0
-```
-
-**验证：** printf 函数成功实现了所有格式说明符，能够正确处理：
-- 百分号转义
-- 字符和字符串输出
-- 十进制和负数
-- 十六进制数字转换
+![assignment1_output](assets/ass1.png)
 
 ### Assignment 2 结果
 

@@ -33,7 +33,9 @@ int printf_add_to_buffer(char *buffer, char c, int &idx, const int BUF_LEN)
  *   %d - decimal integer (supports negative numbers)
  *   %c - single character
  *   %s - null-terminated string
- *   %x - hexadecimal integer (lowercase)
+ *   %x - hexadecimal integer (base 16)
+ *   %o - octal integer (base 8)
+ *   %b - binary integer (base 2)
  *   %% - literal percent character
  *
  * Returns: Number of characters printed
@@ -89,7 +91,9 @@ int printf(const char *const fmt, ...)
 
             case 'd':
             case 'x':
-                // Decimal or hexadecimal integer
+            case 'o':
+            case 'b':
+                // Decimal, hexadecimal, octal, or binary integer
                 int temp = va_arg(ap, int);
 
                 if (temp < 0 && fmt[i] == 'd')
@@ -99,8 +103,13 @@ int printf(const char *const fmt, ...)
                     temp = -temp;
                 }
 
-                // Convert number to string (base 10 for 'd', base 16 for 'x')
-                itos(number, temp, (fmt[i] == 'd' ? 10 : 16));
+                // Convert number to string based on format specifier
+                int base = 10;  // default for 'd'
+                if (fmt[i] == 'x') base = 16;
+                else if (fmt[i] == 'o') base = 8;
+                else if (fmt[i] == 'b') base = 2;
+
+                itos(number, temp, base);
 
                 // Add each digit to buffer
                 for (int j = 0; number[j]; ++j)

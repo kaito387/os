@@ -207,17 +207,21 @@ int printf(const char *const fmt, ...)
                 counter += stdio.print(va_arg(ap, const char *));
                 break;
 
-            case 'd':
-            case 'x':
+            
+                case 'b':
+                case 'o':
+                case 'd':
+                case 'x':
                 int temp = va_arg(ap, int);
 
-                if (temp < 0 && fmt[i] == 'd')
-                {
+                if (temp < 0 && fmt[i] == 'd') {
                     counter += printf_add_to_buffer(buffer, '-', idx, BUF_LEN);
                     temp = -temp;
                 }
 
-                itos(number, temp, (fmt[i] == 'd' ? 10 : 16));
+                itos(number, temp, (
+                    fmt[i] == 'd' ? 10 : (fmt[i] == 'o' ? 8 :
+                    (fmt[i] == 'x' ? 16 : 2))));
 
                 for (int j = 0; number[j]; ++j)
                 {

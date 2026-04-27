@@ -20,9 +20,11 @@ extern "C" void setup_kernel()
     printf("print percentage: %%\n"
            "print char \"N\": %c\n"
            "print string \"Hello World!\": %s\n"
+           "print binary: \"0b101010\": %b\n"
+           "print octal: \"0o777\": %o\n"
            "print decimal: \"-1234\": %d\n"
            "print hexadecimal \"0x7abcdef0\": %x\n",
-           'N', "Hello World!", -1234, 0x7abcdef0);
+           'N', "Hello World!", 0b101010, 0777, -1234, 0x7abcdef0);
     //uint a = 1 / 0;
     asm_halt();
 }
