@@ -37,138 +37,74 @@ printf 函数的实现需要：
 
 #### 2.1 PCB 结构设计
 
-实际上，PCB 在这里更准确地称为 TCB，因为我们实现的是线程而非进程。TCB 结构包含以下字段：
+设计完整的 PCB (Process Control Block) 结构，包含：
 
-```cpp
-struct TCB {
-    uint32 id;              // 线程 ID
-    uint32 *stack;          // 栈指针
-    enum ThreadState state; // 线程状态
-    uint32 stackSize;       // 栈大小
-    ThreadContext context;  // 寄存器上下文
-    ThreadState state;      // 线程状态
-    uint32 priority;        // 优先级
-};
-```
-
-**ThreadContext 结构：**
-
-```cpp
-struct ThreadContext {
-    uint32 esp;  // 栈指针
-    uint32 ebp;  // 基指针
-    uint32 eax, ebx, ecx, edx;  // 通用寄存器
-    uint32 esi, edi;            // 索引寄存器
-    uint32 eip;  // 指令指针
-};
-```
+- `stack` - 栈指针
+- `name` - 线程名
+- `status` - 线程状态 (CREATED, RUNNING, READY, BLOCKED, DEAD)
+- `priority` - 优先级
+- `pid` - 进程/线程 ID
+- `ticks` - 时间片
+- `ticksPassedBy` - 已执行时间
 
 #### 2.2 线程创建过程
 
-1. **从线程池分配 TCB**：维护一个最多 10 个线程的池
-2. **分配栈空间**：使用 malloc 分配指定大小的栈
-3. **初始化上下文**：
-   - 设置 ESP 指向栈顶
-   - 设置 EIP 为线程入口点
-   - 其他寄存器初始化为 0
-4. **管理线程状态**：新创建的线程状态设为 READY
+**线程创建流程：**
 
-#### 2.3 线程局部存储
-
-- 使用全局指针 `currentThread` 指向当前执行的线程
-- 每个线程有独立的 TCB 结构，存储其完整的上下文
-- 通过 `thread_current()` 获取当前线程
+1. 分配 4KB PCB 空间
+2. 初始化线程栈，设置返回地址和参数
+3. 将线程加入就绪队列
+4. 中断驱动的调度器会在适当时刻切换到新线程
 
 ### Assignment 3：线程调度上下文切换
 
-#### 3.1 上下文切换机制
+**作业目标：**
 
-在时钟中断发生时：
+Q：新创建的线程是如何被调度然后开始执行的？
 
-1. **中断处理器保存寄存器**：CPU 自动保存返回地址
-2. **保存线程上下文**：将当前线程的所有寄存器保存到其 TCB
-3. **调度选择**：选择下一个就绪的线程
-4. **恢复上下文**：将选中线程的寄存器从其 TCB 恢复
-5. **恢复执行**：从上次中断处继续执行选中的线程
+查看 `ProgramManager::executeThread` 和 `ProgramManager::schedule` 可以发现，前者用来创建线程，后者用来调度线程。
 
-#### 3.2 栈帧布局
+前者先创建线程并将其加入就绪队列，后者从就绪队列中选择下一个要执行的线程。
 
-中断时的栈帧结构：
+Q：一个正在执行的线程是如何被中断然后被换下处理器的，以及换上处理器后又是如何从被中断点开始执行的。
 
-```
-中断入口时
-  [EIP]  ← 中断服务例程地址
-  [CS]   ← 代码段
-  [EFLAGS] ← 标志寄存器
+查看代码可以知道，有如下关键函数及作用：
 
-中断处理器保存的寄存器（可选）
-  [EAX]
-  [EBX]
-  ...
-```
+- `c_time_interrupt_handler()` [interrupt.cpp](src/kernel/interrupt.cpp#L88) - 时间中断处理程序
+  - 递减当前线程的时间片计数
+  - 时间片用尽时调用 `schedule()` 进行线程切换
 
-#### 3.3 gdb 调试
+- `asm_switch_thread(PCB *cur, PCB *next)` [src/utils/asm_utils.asm](src/utils/asm_utils.asm) - 汇编实现的线程切换
+  - 保存当前线程的 ESP 到 PCB
+  - 加载下一个线程的 ESP
+  - 实现硬件级的上下文切换
 
-可以在以下位置设置断点观察上下文切换：
-- 中断处理器入口：观察到中断发生
-- 上下文保存前：查看当前寄存器值
-- 上下文恢复后：查看即将执行的线程寄存器值
+**线程切换过程：**
+1. **中断发生** - 时钟中断打断当前线程执行
+2. **保存状态** - CPU 自动压栈 (CS, EIP, EFLAGS 等)
+3. **进入中断处理** - 执行 `c_time_interrupt_handler()`
+4. **调度决策** - 如果时间片用尽，调用 `schedule()`
+5. **上下文切换** - `asm_switch_thread()` 交换栈指针和所有寄存器
+6. **线程恢复** - 加载新线程的栈，`iret` 返回并继续执行
 
-### Assignment 4：调度算法的实现
 
-#### 4.1 就绪队列
+### Assignment 4：抢占式优先级调度算法的实现
 
-使用循环队列（circular queue）实现就绪队列：
+这次作业考虑实现抢占式优先级调度算法。
 
-```cpp
-typedef struct {
-    thread_t *threads[MAX_READY_QUEUE];
-    uint32 head;   // 队头指针
-    uint32 tail;   // 队尾指针
-    uint32 count;  // 队列中的线程数
-} ReadyQueue;
-```
+需要考虑的点是，在创建线程时为其分配不同的优先级，并在调度时根据优先级选择下一个要执行的线程。
 
-#### 4.2 FCFS（先来先服务）调度
+此外对于抢占式算法，如果当前线程执行时，遇到了一个优先级更高的线程，调度器会将其切换到该线程。
 
-- **原理**：按照线程加入就绪队列的顺序执行
-- **实现**：从队头取出一个线程，执行完全后再取下一个
-- **优点**：实现简单，公平性好
-- **缺点**：不适合交互式系统
+所以在 `executeThread` 添加线程时，需要增加一次抢占判断。因为 `executeThread` 创建线程时已经关中断了，可以安全地进行抢占判断。
 
-```cpp
-thread_t* schedule_fcfs(void) {
-    if (readyQueue.count == 0) return NULL;
-    
-    thread_t *next = readyQueue.threads[readyQueue.head];
-    readyQueue.head = (readyQueue.head + 1) % MAX_READY_QUEUE;
-    readyQueue.count--;
-    
-    return next;
-}
-```
+**线程调度过程：**
 
-#### 4.3 轮转调度（RR - Round Robin）
-
-- **原理**：每个线程获得相等的 CPU 时间片（时间量子）
-- **实现**：线程执行完一个时间片后，移到就绪队列的末尾
-- **优点**：对所有线程公平，适合分时系统
-- **缺点**：上下文切换开销较大
-
-```cpp
-thread_t* schedule_rr(uint32 timeQuantum) {
-    if (readyQueue.count == 0) return NULL;
-    
-    thread_t *next = readyQueue.threads[readyQueue.head];
-    readyQueue.head = (readyQueue.head + 1) % MAX_READY_QUEUE;
-    
-    // 将线程放回队尾以实现轮转
-    readyQueue.threads[readyQueue.tail] = next;
-    readyQueue.tail = (readyQueue.tail + 1) % MAX_READY_QUEUE;
-    
-    return next;
-}
-```
+1. **线程创建** - 调用 `executeThread` 创建新线程
+2. **抢占判断** - 在创建线程时检查是否需要抢占
+3. **加入就绪队列** - 将新线程加入就绪队列
+4. **调度决策** - 调用 `schedulePriority` 选择下一个要执行的线程
+5. **上下文切换** - 使用 `asm_switch_thread` 进行上下文切换
 
 ---
 
@@ -241,45 +177,159 @@ thread_t* thread_create(void (*entry)(void), uint32 stackSize) {
 }
 ```
 
-### 3. Assignment 3 和 4：调度的关键实现
+### 3. Assignment 3：线程调度切换
 
-**上下文切换函数：**
+这边是 Round Robin 的调度算法，每个线程分配了 `ticks = 1` 即长度为两次中断的时间片。
 
 ```cpp
-void thread_switch(thread_t *from, thread_t *to) {
-    if (from == NULL || to == NULL) return;
-    
-    printf("Switching from thread %d to thread %d\n", from->id, to->id);
-    
-    // 保存当前线程的上下文
-    save_context(from);
-    from->state = READY;
-    
-    // 恢复下一个线程的上下文
-    restore_context(to);
-    to->state = RUNNING;
+void ProgramManager::schedule()
+{
+    bool status = interruptManager.getInterruptStatus();
+    interruptManager.disableInterrupt();
+
+    if (readyPrograms.size() == 0)
+    {
+        interruptManager.setInterruptStatus(status);
+        return;
+    }
+
+    if (running != nullptr)
+    {
+        if (running->status == ProgramStatus::RUNNING)
+        {
+            running->status = ProgramStatus::READY;
+            running->ticks = 1;
+            readyPrograms.push_back(&(running->tagInGeneralList));
+        }
+        else if (running->status == ProgramStatus::DEAD)
+        {
+            releasePCB(running);
+        }
+    }
+
+    ListItem *item = readyPrograms.front();
+    PCB *next = ListItem2PCB(item, tagInGeneralList);
+    PCB *cur = running;
+    next->status = ProgramStatus::RUNNING;
+    running = next;
+    readyPrograms.pop_front();
+    printf("running addr = %d\n", (int)running);
+
+    asm_switch_thread(cur, next);
+
+    interruptManager.setInterruptStatus(status);
 }
 ```
 
-**FCFS 调度器：**
+### 4. Assignment 4：抢占式优先级调度算法
 
 ```cpp
-void schedule_add_thread(thread_t *thread) {
-    if (readyQueue.count >= MAX_READY_QUEUE) return;
-    
-    readyQueue.threads[readyQueue.tail] = thread;
-    readyQueue.tail = (readyQueue.tail + 1) % MAX_READY_QUEUE;
-    readyQueue.count++;
-}
+void ProgramManager::schedulePriority()
+{
+    bool status = interruptManager.getInterruptStatus();
+    interruptManager.disableInterrupt();
 
-thread_t* schedule_fcfs(void) {
-    if (readyQueue.count == 0) return NULL;
+    if (readyPrograms.size() == 0)
+    {
+        interruptManager.setInterruptStatus(status);
+        return;
+    }
+
+    if (running != nullptr)
+    {
+        if (running->status == ProgramStatus::RUNNING)
+        {
+            running->status = ProgramStatus::READY;
+            readyPrograms.push_back(&(running->tagInGeneralList));
+        }
+        else if (running->status == ProgramStatus::DEAD)
+        {
+            releasePCB(running);
+        }
+    }
+
+    // Find the highest priority thread (highest priority value)
+    ListItem *item = readyPrograms.front();
+    PCB *highest = ListItem2PCB(item, tagInGeneralList);
+    ListItem *current = item->next;
     
-    thread_t *next = readyQueue.threads[readyQueue.head];
-    readyQueue.head = (readyQueue.head + 1) % MAX_READY_QUEUE;
-    readyQueue.count--;
+    while (current != nullptr)
+    {
+        PCB *thread = ListItem2PCB(current, tagInGeneralList);
+        if (thread->priority > highest->priority)
+        {
+            highest = thread;
+            item = current;
+        }
+        current = current->next;
+    }
+
+    // Remove the selected thread from ready queue
+    readyPrograms.erase(item);
     
-    return next;
+    PCB *next = highest;
+    PCB *cur = running;
+    next->status = ProgramStatus::RUNNING;
+    running = next;
+
+    asm_switch_thread(cur, next);
+
+    interruptManager.setInterruptStatus(status);
+}
+```
+
+抢占式实现：
+
+```cpp
+int ProgramManager::executeThread(ThreadFunction function, void *parameter, const char *name, int priority)
+{
+    // 关中断，防止创建线程的过程被打断
+    bool status = interruptManager.getInterruptStatus();
+    interruptManager.disableInterrupt();
+
+    // 分配一页作为PCB
+    PCB *thread = allocatePCB();
+
+    if (!thread)
+        return -1;
+
+    // 初始化分配的页
+    memset(thread, 0, PCB_SIZE);
+
+    for (int i = 0; i < MAX_PROGRAM_NAME && name[i]; ++i)
+    {
+        thread->name[i] = name[i];
+    }
+
+    thread->status = ProgramStatus::READY;
+    thread->priority = priority;
+    thread->ticks = 1;
+    thread->ticksPassedBy = 0;
+    thread->pid = ((int)thread - (int)PCB_SET) / PCB_SIZE;
+
+    // 线程栈
+    thread->stack = (int *)((int)thread + PCB_SIZE);
+    thread->stack -= 7;
+    thread->stack[0] = 0;
+    thread->stack[1] = 0;
+    thread->stack[2] = 0;
+    thread->stack[3] = 0;
+    thread->stack[4] = (int)function;
+    thread->stack[5] = (int)program_exit;
+    thread->stack[6] = (int)parameter;
+
+    allPrograms.push_back(&(thread->tagInAllList));
+    readyPrograms.push_back(&(thread->tagInGeneralList));
+
+    // 恢复中断
+    interruptManager.setInterruptStatus(status);
+
+    if (running != nullptr && thread->priority > running->priority)
+    {
+        programManager.schedulePriority();
+    }
+
+    return thread->pid;
 }
 ```
 
@@ -289,97 +339,174 @@ thread_t* schedule_fcfs(void) {
 
 ### Assignment 1 结果
 
+```cpp
+printf("print percentage: %%\n"
+           "print char \"N\": %c\n"
+           "print string \"Hello World!\": %s\n"
+           "print binary: \"0b101010\": %b\n"
+           "print octal: \"0o777\": %o\n"
+           "print decimal: \"-1234\": %d\n"
+           "print hexadecimal \"0x7abcdef0\": %x\n",
+           'N', "Hello World!", 0b101010, 0777, -1234, 0x7abcdef0);
+```
+
 **程序输出：**
 
 ![assignment1_output](assets/ass1.png)
 
 ### Assignment 2 结果
 
-**线程创建验证：**
+程序入口设置：
 
 ```cpp
-thread_t *t1 = thread_create(thread_func1, 4096);
-thread_t *t2 = thread_create(thread_func2, 4096);
-thread_t *t3 = thread_create(thread_func3, 4096);
-
-printf("Created %d threads\n", 3);
+// 创建第一个线程
+// ...
+interruptManager.enableInterrupt();
+programManager.schedule();
 ```
 
-**预期结果：**
-- 成功创建 3 个线程
-- 每个线程有唯一的 ID（0, 1, 2）
-- 每个线程有独立的 4KB 栈
-- 线程状态都是 READY
+```cpp
+void first_thread(void *arg) {
+    printf("Thread 1 (pid %d): starting\n", programManager.running->pid);
+    for(int i = 0; i < 3; i++) {
+        printf("Thread 1 (pid %d): iteration %d\n", 
+        programManager.running->pid, i);
+    }
+    program_exit();
+}
+```
+
+**线程创建验证：**
+
+![](assets/ass2.png)
 
 ### Assignment 3 结果
 
-**上下文切换验证：**
+**切换验证：**
 
-通过 gdb 在以下位置检查寄存器：
+首先是程序的执行结构：
 
-1. **切换前**：
-   - EIP = 0x8000（当前线程代码）
-   - ESP = 0x3000（当前栈顶）
+```cpp
+void second_thread(void *arg) {
+    printf("Thread 2 (pid %d): starting\n", programManager.running->pid);
+    printf("Thread 2 (pid %d): ending\n", programManager.running->pid);
+    program_exit();
+}
 
-2. **切换后**：
-   - EIP = 0x8500（下一个线程代码）
-   - ESP = 0x4000（下一个线程栈）
+void first_thread(void *arg) {
+    printf("Thread 1 (pid %d): starting\n", programManager.running->pid);
+    programManager.executeThread(second_thread, nullptr, "second_thread", 1);
+    while (programManager.readyPrograms.size() > 0);
+    printf("Thread 1 (pid %d): ending\n", programManager.running->pid);
+    program_exit();
+}
 
-**验证上下文切换的正确性**：栈指针和指令指针正确改变
+extern "C" void setup_kernel() {   
+    // ...
+    int pid = programManager.executeThread(
+        first_thread, nullptr, "first_thread", 1);
+    // ...
+    programManager.schedule();
+    // ...
+}
+```
+
+在 GDB 环境下，先进入 `setup_kernel`，然后由 `schedule` 函数进行第一次调度，将 `first_thread` 放入 ready 队列，效果如下：
+
+![](assets/ass3-step1.png)
+
+在进入 `asm_switch_thread` 之前，可以看到 `programManager.running` 被正确切换到 `first_thread` 的 PCB 地址，我们也可以打印出这个 PCB 的内容，如下：
+
+![](assets/ass3-step2.png)
+
+随后我们进入 `first_thread`。查看进入进程前和进入进程后的 esp, 可以发现 esp 正好和栈指针相差 20, 即 `asm_switch_thread` 函数中 `pop` 和 `ret` 操作前移了 20 字节，正是上下文切换的结果。寄存器值如下：
+
+![](assets/ass3-step3.png)
+
+从代码里可以看出，第一个线程在创建完第二个线程后，会被 while 语句阻塞。随后会自动触发两次时间中断，耗尽时间片，由 `intteruptManager` 调用 schedule 强制调度：
+
+![](assets/ass3-step4.png)
+
+随后，schedule 根据 Round Robin 规则，调度执行 `second_thread`，可以进入程序片段后检查寄存器 esp, 确实是栈指针 +20 的结果：
+
+![](assets/ass3-step5.png)
+
+我们执行完 `second_thread`，可以看到算法接下来需要调度下一个执行的进程，即 `first_thread`，并且从上一次的中断点执行。实现上 `asm_switch_thread(cur, next)` 这个函数先把当前上一次被中断的 `first_thread` 的 esp 存进 PCB 的 `stack`，下一次调度时再从中恢复。可以看到 `first_thread` 的 PCB 和恢复执行的结果如下：
+
+![](assets/ass3-step6.png)
 
 ### Assignment 4 结果
 
+**线程优先级设置**
+
+```cpp
+// setup_kernel()
+programManager.executeThread(first_thread, nullptr, "first_thread", 1);
+    
+interruptManager.enableInterrupt();
+while (programManager.readyPrograms.size() > 0)
+{
+  printf("Start scheduling\n");
+  programManager.schedulePriority();
+}
+```
+
+```cpp
+void third_thread(void *arg) {
+    printf("Working on thread 3 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    program_exit();
+}
+void forth_thread(void *arg) {
+    printf("Working on thread 4 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    program_exit();
+}
+
+void second_thread(void *arg) {
+    printf("Working on thread 2 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    programManager.executeThread(third_thread, nullptr, "third_thread", 4);
+    programManager.executeThread(forth_thread, nullptr, "forth_thread", 2);
+    printf("Second thread completed\n");
+    program_exit();
+}
+
+void first_thread(void *arg)
+{
+    printf("Working on thread 1 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    programManager.executeThread(second_thread, nullptr, "second_thread", 3);
+    printf("First thread completed\n");
+    program_exit();
+}
+```
+
 **调度顺序验证：**
 
-对于 FCFS 调度：
-- Thread 0 执行完成
-- Thread 1 执行完成  
-- Thread 2 执行完成
-- 按加入顺序执行
+线程 2 抢占线程 1；线程 2 创建了线程 3 和 4, 其中线程 3 可以抢占线程 2, 线程 4 优先级低于线程 2, 只能在线程 2 执行完成后执行；线程 1 优先级最低，最后执行完毕。
 
-对于 Round Robin 调度：
-- 每个线程执行时间片（如 10ms）
-- 然后移到就绪队列末尾
-- 轮转执行所有线程
+![](assets/ass4.png)
 
 ---
 
 ## 总结
 
-本实验完成了从基础的格式化输出函数实现到内核线程创建、调度的完整链路。关键收获包括：
+本实验完成了从基础的格式化输出函数实现，到内核线程创建、上下文切换，再到调度算法实现的完整链路。通过这次实验，我对内核中“线程如何被创建、如何被切换、如何被调度”有了更完整的理解。
 
 ### 1. 理论收获
 
-- **可变参数机制**：深入理解了 C 语言函数调用的栈帧结构，掌握了 va_list 等宏的工作原理
-- **线程模型**：理解了 TCB 结构在操作系统中的重要作用，每个线程需要保存独立的执行上下文
-- **上下文切换**：认识到线程切换的核心是保存当前状态并恢复下一个线程的状态
-- **调度算法**：了解了 FCFS 和 RR 两种基本调度算法的原理和实现
+- **可变参数机制**：深入理解了 `printf` 中 `va_list`、`va_start` 和 `va_arg` 的使用方式，也进一步理解了函数调用时参数在栈中的传递过程。
+- **线程模型**：理解了 PCB/TCB 在操作系统中的作用，每个线程都需要保存自己的栈、状态、优先级和运行信息。
+- **上下文切换**：认识到线程切换的核心不是简单跳转，而是保存当前现场、恢复目标线程现场，并通过 `iret` 返回到被中断的位置继续执行。
+- **调度算法**：了解了先来先服务、轮转调度以及抢占式优先级调度的基本思想和适用场景。
 
 ### 2. 技术收获
 
-- 实现了支持多种格式说明符的 printf 函数，可用于内核调试
-- 设计并实现了简单有效的 TCB 结构和线程管理机制
-- 建立了基础的上下文切换框架，为更复杂的调度提供了基础
-- 实现了就绪队列和两种调度算法，理解了调度器的工作原理
+- 实现了支持多种格式说明符的 `printf`，为内核调试提供了方便。
+- 设计并实现了 PCB 结构、线程创建流程和就绪队列管理机制。
+- 建立了基于汇编的上下文切换框架，明确了 `asm_switch_thread` 在保存和恢复栈指针中的作用。
+- 实现了轮转调度和优先级调度，并理解了中断驱动调度在内核中的工作方式。
 
 ### 3. 问题解决
 
-- **可变参数处理**：通过仔细理解栈帧布局，正确实现了参数的提取和类型转换
-- **线程栈初始化**：注意栈从高地址向低地址增长，初始化时需要将栈指针指向栈顶
-- **调度队列管理**：使用循环队列减少内存浪费，简化了队列操作
-
----
-
-## 注
-
-1. 实验中的所有代码已在 `/home/lht/dev/study/os/lab5/` 目录下实现
-2. printf 实现基于现有的 STDIO 类，使用了缓冲机制提高效率
-3. 线程实现采用了简单的池管理方式，支持最多 10 个线程
-4. 调度器采用了模块化设计，易于添加新的调度算法
-5. 本实现主要用于教学目的，展示了操作系统核心组件的基本工作原理
-
----
-
-**实验日期**：2026 年 4 月 27 日  
-**学号**：24344064  
-**班级**：操作系统实验课
+- **可变参数处理**：通过分析栈帧布局，正确处理了不同类型参数的读取和输出。
+- **线程栈初始化**：根据线程首次启动和函数返回的需要，手工构造了初始栈帧。
+- **上下文恢复**：通过 GDB 调试确认了线程切换时 `esp`、PCB 中保存的 `stack` 以及中断返回之间的对应关系。
+- **抢占式调度**：在创建线程和时钟中断两个位置加入调度判断，解决了高优先级线程不能及时抢占的问题。

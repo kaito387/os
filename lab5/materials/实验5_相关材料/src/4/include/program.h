@@ -34,6 +34,7 @@ public:
 
     // 执行线程调度
     void schedule();
+    void schedulePriority();
 };
 
 void program_exit();

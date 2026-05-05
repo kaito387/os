@@ -49,7 +49,7 @@ int ProgramManager::executeThread(ThreadFunction function, void *parameter, cons
 
     thread->status = ProgramStatus::READY;
     thread->priority = priority;
-    thread->ticks = priority * 10;
+    thread->ticks = 1;
     thread->ticksPassedBy = 0;
     thread->pid = ((int)thread - (int)PCB_SET) / PCB_SIZE;
 
@@ -70,6 +70,11 @@ int ProgramManager::executeThread(ThreadFunction function, void *parameter, cons
     // 恢复中断
     interruptManager.setInterruptStatus(status);
 
+    if (running != nullptr && thread->priority > running->priority)
+    {
+        programManager.schedulePriority();
+    }
+
     return thread->pid;
 }
 
@@ -84,15 +89,18 @@ void ProgramManager::schedule()
         return;
     }
 
-    if (running->status == ProgramStatus::RUNNING)
+    if (running != nullptr)
     {
-        running->status = ProgramStatus::READY;
-        running->ticks = running->priority * 10;
-        readyPrograms.push_back(&(running->tagInGeneralList));
-    }
-    else if (running->status == ProgramStatus::DEAD)
-    {
-        releasePCB(running);
+        if (running->status == ProgramStatus::RUNNING)
+        {
+            running->status = ProgramStatus::READY;
+            running->ticks = 1;
+            readyPrograms.push_back(&(running->tagInGeneralList));
+        }
+        else if (running->status == ProgramStatus::DEAD)
+        {
+            releasePCB(running);
+        }
     }
 
     ListItem *item = readyPrograms.front();
@@ -101,6 +109,7 @@ void ProgramManager::schedule()
     next->status = ProgramStatus::RUNNING;
     running = next;
     readyPrograms.pop_front();
+    printf("running addr = %d\n", (int)running);
 
     asm_switch_thread(cur, next);
 
@@ -114,12 +123,12 @@ void program_exit()
 
     if (thread->pid)
     {
-        programManager.schedule();
+        programManager.schedulePriority();
     }
     else
     {
         interruptManager.disableInterrupt();
-        printf("halt\n");
+        printf("root thread exited\n");
         asm_halt();
     }
 }
@@ -135,14 +144,17 @@ void ProgramManager::schedulePriority()
         return;
     }
 
-    if (running->status == ProgramStatus::RUNNING)
+    if (running != nullptr)
     {
-        running->status = ProgramStatus::READY;
-        readyPrograms.push_back(&(running->tagInGeneralList));
-    }
-    else if (running->status == ProgramStatus::DEAD)
-    {
-        releasePCB(running);
+        if (running->status == ProgramStatus::RUNNING)
+        {
+            running->status = ProgramStatus::READY;
+            readyPrograms.push_back(&(running->tagInGeneralList));
+        }
+        else if (running->status == ProgramStatus::DEAD)
+        {
+            releasePCB(running);
+        }
     }
 
     // Find the highest priority thread (highest priority value)
@@ -150,7 +162,7 @@ void ProgramManager::schedulePriority()
     PCB *highest = ListItem2PCB(item, tagInGeneralList);
     ListItem *current = item->next;
     
-    while (current != &(readyPrograms.head))
+    while (current != nullptr)
     {
         PCB *thread = ListItem2PCB(current, tagInGeneralList);
         if (thread->priority > highest->priority)

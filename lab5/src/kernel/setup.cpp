@@ -12,66 +12,55 @@ InterruptManager interruptManager;
 ProgramManager programManager;
 
 void third_thread(void *arg) {
-    for(int i = 0; i < 3; i++) {
-        printf("Thread 3 (pid %d): iteration %d\n", programManager.running->pid, i);
-    }
+    printf("Working on thread 3 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    program_exit();
+}
+void forth_thread(void *arg) {
+    printf("Working on thread 4 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
     program_exit();
 }
 
 void second_thread(void *arg) {
-    for(int i = 0; i < 3; i++) {
-        printf("Thread 2 (pid %d): iteration %d\n", programManager.running->pid, i);
-    }
+    printf("Working on thread 2 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    programManager.executeThread(third_thread, nullptr, "third_thread", 4);
+    programManager.executeThread(forth_thread, nullptr, "forth_thread", 2);
+    printf("Second thread completed\n");
     program_exit();
 }
 
 void first_thread(void *arg)
 {
-    // 第1个线程创建其他线程
-    printf("Thread 1 (pid %d): starting\n", programManager.running->pid);
-    if (!programManager.running->pid)
-    {
-        programManager.executeThread(second_thread, nullptr, "second_thread", 1);
-        programManager.executeThread(third_thread, nullptr, "third_thread", 1);
-    }
-    for(int i = 0; i < 3; i++) {
-        printf("Thread 1 (pid %d): iteration %d\n", programManager.running->pid, i);
-    }
+    printf("Working on thread 1 (pid %d, priority %d)\n", programManager.running->pid, programManager.running->priority);
+    programManager.executeThread(second_thread, nullptr, "second_thread", 3);
+    printf("First thread completed\n");
     program_exit();
 }
 
 extern "C" void setup_kernel()
-{
-
+{   
     // 中断管理器
     interruptManager.initialize();
     interruptManager.enableTimeInterrupt();
     interruptManager.setTimeInterrupt((void *)asm_time_interrupt_handler);
-
+    
     // 输出管理器
     stdio.initialize();
+    printf("STDIO initialized. Addr: %x\n", (uint32)&stdio);
 
     // 进程/线程管理器
     programManager.initialize();
+    printf("ProgramManager initialized. Addr: %x\n", (uint32)&programManager);
 
-    // 创建第一个线程
-    int pid = programManager.executeThread(first_thread, nullptr, "first_thread", 1);
-    if (pid == -1)
+    programManager.executeThread(first_thread, nullptr, "first_thread", 1);
+    
+    interruptManager.enableInterrupt();
+    while (programManager.readyPrograms.size() > 0)
     {
-        printf("can not execute thread\n");
-        asm_halt();
+        printf("Start scheduling\n");
+        programManager.schedulePriority();
     }
 
-    ListItem *item = programManager.readyPrograms.front();
-    PCB *firstThread = ListItem2PCB(item, tagInGeneralList);
-    firstThread->status = RUNNING;
-    programManager.readyPrograms.pop_front();
-    programManager.running = firstThread;
-    
-    // 启用中断并切换到第一个线程
-    interruptManager.enableInterrupt();
-    asm_switch_thread(0, firstThread);
-
     // 主调度循环 - 不应该到达这里，但作为安全措施
+    printf("scheduling ended\n");
     asm_halt();
 }
