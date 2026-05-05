@@ -28,6 +28,7 @@ void itos(char *numStr, uint32 num, uint32 mod) {
     // 特别处理num=0的情况
     if(!length) {
         numStr[0] = '0';
+        numStr[1] = '\0';
         ++length;
     }
 
@@ -37,4 +38,12 @@ void itos(char *numStr, uint32 num, uint32 mod) {
     }
     
     numStr[length] = '\0';
+}
+
+void memset(void *memory, char value, int length)
+{
+    for (int i = 0; i < length; ++i)
+    {
+        ((char *)memory)[i] = value;
+    }
 }

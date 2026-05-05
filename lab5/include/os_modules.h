@@ -3,8 +3,10 @@
 
 #include "interrupt.h"
 #include "stdio.h"
+#include "program.h"
 
 extern InterruptManager interruptManager;
 extern STDIO stdio;
+extern ProgramManager programManager;
 
 #endif

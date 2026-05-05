@@ -1,13 +1,18 @@
-# Makefile for Lab5 Assignment 1 & 2
-# Minimal implementation for printf and thread creation
+# Makefile for Lab5 Assignment
 
+
+ASM = nasm
 CXX = g++
-CXXFLAGS = -g -Wall -march=i386 -m32 -nostdlib -fno-builtin -ffreestanding -fno-pic
+CXXFLAGS = -g -Wall -std=gnu++11 -march=i386 -m32 -nostdlib -fno-builtin -ffreestanding -fno-pic
+LINKER = ld
 INCLUDE = -I./include
 
 # Source files - core implementation
-SOURCES = src/kernel/stdio.cpp src/kernel/printf.cpp src/kernel/thread.cpp src/utils/stdlib.cpp
-OBJECTS = $(SOURCES:.cpp=.o)
+CXX_SOURCES = $(wildcard src/kernel/*.cpp) $(wildcard src/utils/*.cpp)
+ASM_SOURCES = src/utils/asm_utils.asm
+CXX_OBJECTS = $(CXX_SOURCES:.cpp=.o)
+ASM_OBJECTS = $(ASM_SOURCES:.asm=.o)
+OBJECTS = $(CXX_OBJECTS) $(ASM_OBJECTS)
 
 # Targets
 .PHONY: compile build run clean help
@@ -45,12 +50,19 @@ run:
 	@echo "  - Unique thread IDs"
 	@echo ""
 	@echo "Build artifacts:"
-	@ls -lh *.o src/kernel/*.o src/utils/*.o 2>/dev/null | awk '{print "  " $$9 " (" $$5 ")"}'
+	@ls -lh $(OBJECTS) 2>/dev/null | awk '{print "  " $$9 " (" $$5 ")"}'
 	@echo ""
 
 # Compile object files
-%.o: %.cpp
+
+src/kernel/%.o: src/kernel/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -o $@
+
+src/utils/%.o: src/utils/%.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -o $@
+
+src/utils/asm_utils.o: src/utils/asm_utils.asm
+	$(ASM) -f elf32 $< -o $@
 
 # Clean up
 clean:
