@@ -1,3 +1,7 @@
 *.pdf
 *bin/
 *.swp
+*.img
+*.o
+*.bin
+*.obj
