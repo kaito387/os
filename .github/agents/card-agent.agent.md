@@ -76,9 +76,14 @@ Topic,Subtopic,Question,Answer,Example,Notes,Tags
 "Threads","Definition","What is a thread?","A basic unit of CPU utilization...","Like workers sharing an office","","#Threads,#Definition"
 ```
 
-Each note generates **2 review cards** in ANKI:
-- **Card 1** (Concept → Answer): Shows Topic/Subtopic + Question on front; Answer + Example + Notes on back
-- **Card 2** (Example → Concept): Shows Topic/Subtopic + Example on front; Answer + Example + Notes on back (reverse learning)
+**Markdown formatting**: You can use markdown in the Answer, Example, and Notes fields. The card template converts it to HTML at render time. Supported syntax:
+- `**bold**` or `__bold__` → bold text
+- `*italic*` or `_italic_` → italic text
+- `` `code` `` → inline code
+- `- item` or `• item` → bullet lists
+- Blank lines → paragraph breaks
+
+Each note generates **1 review card**: Topic/Subtopic + Question on front, Answer + Example + Notes on back.
 
 ## Output Format
 

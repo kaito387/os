@@ -86,21 +86,53 @@ def cmd_create_model():
 .answer {
   font-size: 16px;
   color: #111;
+  line-height: 1.6;
+}
+.answer p {
+  margin: 0 0 8px 0;
+}
+.answer ul, .example ul, .notes ul {
+  margin: 4px 0 8px 0;
+  padding-left: 20px;
+}
+.answer li, .example li, .notes li {
+  margin-bottom: 4px;
+  list-style-type: disc;
+}
+.answer code, .example code, .notes code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+.answer pre {
+  background: #f5f5f5;
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
 }
 .example {
   font-size: 15px;
   color: #555;
-  font-family: monospace;
+  line-height: 1.5;
+}
+.example p {
+  margin: 0 0 6px 0;
 }
 .notes {
   font-size: 14px;
   color: #888;
   font-style: italic;
+  line-height: 1.5;
+}
+.notes p {
+  margin: 0 0 4px 0;
 }
 hr {
   border: 0;
   border-top: 1px solid #ccc;
-  margin: 6px 0;
+  margin: 8px 0;
 }
 """,
         "cardTemplates": [
@@ -114,25 +146,71 @@ hr {
                 "Back": (
                     '<div class="topic">{{Topic}} / {{Subtopic}}</div>\n'
                     '<hr>\n'
-                    '<div class="answer">{{Answer}}</div>\n'
-                    '{{#Example}}<hr>\n<div class="example"><b>Example:</b><br>{{Example}}</div>{{/Example}}\n'
-                    '{{#Notes}}<hr>\n<div class="notes"><b>Notes:</b><br>{{Notes}}</div>{{/Notes}}'
-                ),
-            },
-            {
-                "Name": "Example → Concept",
-                "Front": (
-                    '<div class="topic">{{Topic}} / {{Subtopic}}</div>\n'
-                    '<hr>\n'
-                    '<div class="example"><b>Example:</b><br>{{Example}}</div>\n'
-                    '{{#Question}}<hr>\n<div class="question">{{Question}}</div>{{/Question}}'
-                ),
-                "Back": (
-                    '<div class="topic">{{Topic}} / {{Subtopic}}</div>\n'
-                    '<hr>\n'
-                    '<div class="answer">{{Answer}}</div>\n'
-                    '{{#Example}}<hr>\n<div class="example"><b>Recall:</b><br>{{Example}}</div>{{/Example}}\n'
-                    '{{#Notes}}<hr>\n<div class="notes"><b>Notes:</b><br>{{Notes}}</div>{{/Notes}}'
+                    '<script type="text/plain" id="answer-raw">{{Answer}}</script>\n'
+                    '<div class="answer" id="answer-field"></div>\n'
+                    '{{#Example}}<hr>\n'
+                    '<script type="text/plain" id="example-raw">{{Example}}</script>\n'
+                    '<div class="example" id="example-field"></div>\n'
+                    '{{/Example}}\n'
+                    '{{#Notes}}<hr>\n'
+                    '<script type="text/plain" id="notes-raw">{{Notes}}</script>\n'
+                    '<div class="notes" id="notes-field"></div>\n'
+                    '{{/Notes}}\n'
+                    '<script>\n'
+                    '(function() {\n'
+                    '  function inlineFmt(text) {\n'
+                    '    // bold: **text** or __text__\n'
+                    '    text = text.replace(/\\*\\*(.+?)\\*\\*/g, "<b>$1</b>");\n'
+                    '    text = text.replace(/__(.+?)__/g, "<b>$1</b>");\n'
+                    '    // italic: *text* (but NOT **text**) — use negative lookbehind/lookahead\n'
+                    '    text = text.replace(/(?<!\\*)\\*(?!\\*)(.+?)(?<!\\*)\\*(?!\\*)/g, "<i>$1</i>");\n'
+                    '    text = text.replace(/\\b_(.+?)_\\b/g, "<i>$1</i>");\n'
+                    '    // inline code: `text`\n'
+                    '    text = text.replace(/`(.+?)`/g, "<code>$1</code>");\n'
+                    '    return text;\n'
+                    '  }\n'
+                    '  function md(text) {\n'
+                    '    if (!text || !text.trim()) return "";\n'
+                    '    // Split into paragraphs (blank-line separated)\n'
+                    '    var paragraphs = text.split(/\\n\\n+/);\n'
+                    '    var result = paragraphs.map(function(p) {\n'
+                    '      p = p.trim();\n'
+                    '      if (!p) return "";\n'
+                    '      var lines = p.split("\\n");\n'
+                    '      // Check if every line starts with a bullet marker\n'
+                    '      var isList = lines.length > 0 && lines.every(function(l) {\n'
+                    '        return /^[•\\-]\\s/.test(l);\n'
+                    '      });\n'
+                    '      if (isList) {\n'
+                    '        var items = lines.map(function(l) {\n'
+                    '          var content = l.replace(/^[•\\-]\\s+/, "");\n'
+                    '          return "<li>" + inlineFmt(content) + "</li>";\n'
+                    '        });\n'
+                    '        return "<ul>" + items.join("") + "</ul>";\n'
+                    '      }\n'
+                    '      // Regular paragraph: join lines with <br>\n'
+                    '      return "<p>" + lines.map(inlineFmt).join("<br>") + "</p>";\n'
+                    '    }).join("");\n'
+                    '    // Clean up empty containers\n'
+                    '    result = result.replace(/<p><\\/p>/g, "");\n'
+                    '    result = result.replace(/<ul><\\/ul>/g, "");\n'
+                    '    return result;\n'
+                    '  }\n'
+                    '  function render(id, label) {\n'
+                    '    var raw = document.getElementById(id + "-raw");\n'
+                    '    var display = document.getElementById(id + "-field");\n'
+                    '    if (!raw || !display) return;\n'
+                    '    var text = raw.textContent.trim();\n'
+                    '    if (!text) return;\n'
+                    '    var html = md(text);\n'
+                    '    if (label && html) html = "<b>" + label + ":</b><br>" + html;\n'
+                    '    display.innerHTML = html;\n'
+                    '  }\n'
+                    '  render("answer", "");\n'
+                    '  render("example", "Example");\n'
+                    '  render("notes", "Notes");\n'
+                    '})();\n'
+                    '</script>'
                 ),
             },
         ],
@@ -144,8 +222,10 @@ hr {
         print(f"Model '{model_name}' already exists — updating templates and CSS only.")
         print("NOTE: Field order cannot be updated via API.")
         print(f"If the first field is not 'Question', manually delete '{model_name}' in ANKI")
-        print("(Tools → Manage Note Types → select '{model_name}' → Delete), then re-run this command.")
+        print("(Tools → Manage Note Types → select the model → Delete), then re-run this command.")
         templates_dict = {t["Name"]: {"Front": t["Front"], "Back": t["Back"]} for t in model["cardTemplates"]}
+        # Also include an empty placeholder to neutralize any stale old templates (e.g., from v1)
+        templates_dict["Example → Concept"] = {"Front": "", "Back": ""}
         _rpc("updateModelTemplates", {"model": {"name": model_name, "templates": templates_dict}})
         _rpc("updateModelStyling", {"model": {"name": model_name, "css": model["css"]}})
     else:
