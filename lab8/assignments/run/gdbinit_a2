@@ -1,0 +1,83 @@
+# ============================================================
+# gdbinit for Assignment 2: Fork 的奥秘
+# 用法: cd assignments/build && make debug
+# ============================================================
+target remote:1234
+file ../build/kernel.o
+set disassembly-flavor intel
+
+# ---- 断点设置 ----
+
+# BP1: fork 包装函数 — 用户侧入口
+#      注意: 此处 eax 是上层残留值（通常为 0），系统调用号 2 尚未加载
+#      用 fork_watch 查看 CS（应为 0x2b 用户态）和 ESP（应为用户栈）
+b fork
+
+# BP2: ProgramManager::fork() — 内核侧 fork 实现
+b _ZN14ProgramManager4forkEv
+
+# BP3: copyProcess — 观察资源复制过程，特别是 childpps->eax = 0
+b _ZN14ProgramManager11copyProcessEP3PCBS1_
+
+# BP4: asm_start_process — 子进程首次被调度时的启动点
+b asm_start_process
+
+# BP5: asm_switch_thread — 进程调度，观察何时切换到子进程
+b asm_switch_thread
+
+# ---- 操作步骤 ----
+# 阶段一：父进程调用 fork (BP1 → BP2 → BP3)
+#   1. continue → 停在 fork (BP1)
+#      fork 是一个包装函数: int fork() { return asm_system_call(2); }
+#      此时函数刚进入，eax 是上层代码残留值（通常为 0），尚未加载系统调用号 2。
+#      系统调用号 2 是 asm_system_call 的参数，需要用 ni 逐步执行 fork 的代码
+#      才可以看到 push 2 压栈，或者等进入 asm_system_call 后才能看到。
+#      - fork_watch → 查看当前 PID、CS(0x2b 用户态)、ESP(用户栈)
+#      - 这是用户代码调用 fork 的位置，返回地址在栈顶
+#
+#   2. continue → 停在 ProgramManager::fork (BP2)
+#      - p parent->pid  (父进程 pid)
+#      - p parent->pageDirectoryAddress  (父进程页目录表)
+#
+#   3. continue → 停在 copyProcess (BP3)
+#      - 观察 childpps->eax = 0 这行（确保子进程 fork 返回 0）
+#      - p *childpps (查看子进程的 ProcessStartStack)
+#      - p *parentpps (查看父进程的 ProcessStartStack)
+#      - 单步跟踪页目录表复制、物理页复制过程
+#
+# 阶段二：子进程首次被调度 (BP4 → BP5)
+#   4. continue → 停在 asm_switch_thread (BP5)，多次 continue
+#      直到切换到子进程（观察 cur 和 next 参数）
+#      - p cur->pid (当前进程 pid)
+#      - p next->pid (下一个进程 pid，当 next->pid != cur->pid 时就是切换)
+#   5. continue → 停在 asm_start_process (BP4)
+#      - info registers esp (即将被设为 ProcessStartStack)
+#      - ni 执行 mov esp, eax
+#      - info registers esp
+#      - x/20wx $esp (ProcessStartStack 内容)
+#      - ni → popad
+#      - info registers eax  (应为 0，这就是子进程看到的 fork 返回值！)
+#      - ni → pop gs/fs/es/ds
+#      - info registers ds es fs gs  (应为用户数据段选择子)
+#      - ni → iret
+#      - info registers cs eip  (已进入用户态，eip 与父进程相同)
+#      - 继续执行，子进程最终从 fork 返回到 a2_process
+
+define fork_watch
+    printf "=== Current PID: "
+    print programManager.running->pid
+    printf "=== Current CS: "
+    print/x $cs
+    printf "=== Current EAX (fork BP: 上层残留值; asm_system_call: 系统调用号): "
+    print/x $eax
+    printf "=== Current ESP: "
+    print/x $esp
+    printf "=== Stack top 4 words:\n"
+    x/4wx $esp
+end
+
+printf "=== Assignment 2: Fork gdb 分析就绪 ===\n"
+printf "断点: fork → ProgramManager::fork → copyProcess → asm_switch_thread → asm_start_process\n"
+printf "注意: b fork 停在 fork() 包装函数入口，eax 是残留值（不是 2）\n"
+printf "用 'fork_watch' 查看当前上下文\n"
+printf "输入 'continue' 开始\n"

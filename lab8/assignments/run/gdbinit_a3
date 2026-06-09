@@ -1,0 +1,76 @@
+# ============================================================
+# gdbinit for Assignment 3: Exit & Wait 分析 + 僵尸进程回收
+# 用法: cd assignments/build && make debug
+# ============================================================
+target remote:1234
+file ../build/kernel.o
+set disassembly-flavor intel
+
+# ---- 断点设置 ----
+
+# BP1: ProgramManager::exit — 进程退出
+b _ZN14ProgramManager4exitEi
+
+# BP2: ProgramManager::wait — 父进程等待子进程
+b _ZN14ProgramManager4waitEPi
+
+# BP3: ProgramManager::schedule — 观察调度中的僵尸进程回收
+b _ZN14ProgramManager8scheduleEv
+
+# BP4: load_process — 观察隐式 exit 的栈设置
+b _Z12load_processPKc
+
+# ---- 提示 ----
+# 阶段一：分析 exit 执行过程 (BP1)
+#   1. continue → 停在 ProgramManager::exit (BP1)
+#      - p ret  (退出返回值)
+#      - p programManager.running->pid  (正在退出的进程)
+#      - p/x programManager.running->pageDirectoryAddress  (页目录表地址)
+#      - 单步跟踪：
+#        ni → 标记 DEAD 状态
+#        ni → 遍历页目录表释放物理页
+#        ni → 释放页目录表本身
+#        ni → 释放虚拟地址池位图
+#        ni → 调用 schedule 让出 CPU
+#
+# 阶段二：分析 wait 执行过程 (BP2)
+#   2. continue → 停在 ProgramManager::wait (BP2)
+#      - p retval  (返回值指针)
+#      - 单步跟踪遍历 allPrograms 链表
+#      - p child->pid  (子进程 pid)
+#      - p child->status  (应为 DEAD)
+#      - p child->retValue  (子进程退出返回值)
+#      - 观察 releasePCB 回收 PCB
+#
+# 阶段三：僵尸进程回收 (BP3)
+#   3. continue → 停在 schedule (BP3)
+#      - 当孤儿子进程退出后（父进程已死），schedule 中
+#      - 观察到父进程状态为 DEAD 时
+#      - 触发 zombie process recycle 输出
+#      - p running->pid (被回收的僵尸进程)
+#      - p running->parentPid (已死父进程 pid)
+#
+# 阶段四：隐式 exit (BP4)
+#   4. 重新启动 → 停在 load_process
+#      - 观察 userStack 的设置：
+#        userStack[0] = (int)exit  → 进程返回时自动跳转到 exit
+#        userStack[1] = 0          → exit 的"返回地址"
+#        userStack[2] = 0          → exit 的参数 (ret = 0)
+
+define process_watch
+    printf "=== Running PID: "
+    print programManager.running->pid
+    printf "=== Running Status: "
+    print programManager.running->status
+    printf "=== Running pageDir: "
+    print/x programManager.running->pageDirectoryAddress
+    printf "=== allPrograms size: "
+    print programManager.allPrograms.size()
+    printf "=== readyPrograms size: "
+    print programManager.readyPrograms.size()
+end
+
+printf "=== Assignment 3: Exit/Wait gdb 分析就绪 ===\n"
+printf "断点: exit → wait → schedule → load_process\n"
+printf "用 'process_watch' 查看所有进程状态\n"
+printf "输入 'continue' 开始\n"

@@ -1,4 +1,5 @@
 *.pdf
+slides/
 *.csv
 *bin/
 *.swp

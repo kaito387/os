@@ -1,0 +1,81 @@
+# ============================================================
+# gdbinit for Assignment 1: 系统调用分析
+# 用法: cd assignments/build && make debug
+# ============================================================
+target remote:1234
+file ../build/kernel.o
+set disassembly-flavor intel
+
+# ---- 断点设置 ----
+
+# BP1: 系统调用入口 — 条件断点，仅当 CPL=3（用户态）时才停下
+#      CPL = CS & 3，用户态 CPL=3，内核态 CPL=0
+b asm_system_call if ($cs & 3) == 3
+
+# BP2: 系统调用中断处理（内核侧）— 无条件停下
+b asm_system_call_handler
+
+# BP3: C 语言处理函数 — 观察参数如何从栈取出
+b syscall_factorial
+
+# BP4: 备选：如果想停在 get_pid 的系统调用处理也可以加上
+b syscall_get_pid
+
+# ---- 操作步骤 ----
+# 1. continue → 第一次停在 asm_system_call 处（来自 a1_process 的 get_pid 或 factorial）
+#    在此之前会先经过 first_thread 的 printf("start process\n") → write 系统调用，
+#    但由于条件断点 ($cs & 3) == 3，那些内核态的调用会被自动跳过。
+#
+#    在 asm_system_call 处：
+#    - p/x $cs          → 应显示 0x2b（用户代码段，CPL=3）
+#    - p/x $esp         → 应显示 0x8048xxx（用户栈范围）
+#    - show_context     → 查看完整上下文
+#    截图！→ a1-2（用户态调用系统调用入口）
+#
+# 2. ni 若干次直到 int 0x80 之前：
+#    - show_context
+#    截图！→ a1-3-before（int 0x80 前）
+#
+# 3. si → 进入 asm_system_call_handler：
+#    - p/x $cs          → 应显示 0x20（内核代码段，CPL=0）
+#    - p/x $esp         → 注意栈已切换（对比上一步的 esp）
+#    - show_context
+#    截图！→ a1-3-after（int 0x80 后，栈已切换）
+#
+# 4. 仍在 asm_system_call_handler：
+#    - x/32wx $esp      → 观察内核栈：
+#        栈上应有 SS(old), ESP(old), EFLAGS, CS(old), EIP
+#        然后 ds, es, fs, gs, pushad 的 8 个寄存器
+#    截图！→ a1-4（内核栈全景）
+#
+# 5. 仍在同一位置：
+#    - p/x tss          → 关注 ss0 和 esp0
+#        如果 a1_process 曾被调度过，esp0 应非 0（= PCB + PAGE_SIZE）
+#    截图！→ a1-5（TSS 内容）
+#
+# 6. continue → 停在 syscall_factorial：
+#    - info registers eax  → 参数 n（第一次是 5）
+#    - bt                   → 调用栈
+#    - ni 跟踪计算过程
+#
+# 7. continue → factorial 调用返回，在 asm_system_call 的 ret 处：
+#    - p/x $cs          → 应显示 0x2b（已返回用户态）
+#    - p/x $eax         → 应显示 0x78 = 120（5!）
+#    - p/x $esp         → 应显示用户栈地址
+#    - show_context
+#    截图！→ a1-6（系统调用返回用户态）
+
+define show_context
+    printf "=== CS (CPL): "
+    print/x $cs
+    printf "=== ESP: "
+    print/x $esp
+    printf "=== EAX: "
+    print/x $eax
+    printf "=== Stack top 16 words:\n"
+    x/16wx $esp
+end
+
+printf "=== Assignment 1: 系统调用 gdb 分析就绪 ===\n"
+printf "条件断点：仅当 CPL=3 时停在 asm_system_call，跳过内核态调用\n"
+printf "输入 'continue' 开始，用 'show_context' 查看上下文\n"
